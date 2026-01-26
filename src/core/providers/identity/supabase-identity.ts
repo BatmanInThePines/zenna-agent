@@ -304,7 +304,8 @@ export class SupabaseIdentityStore implements IdentityStore {
   }
 
   /**
-   * Get session conversation history
+   * Get conversation history for a user (persists across sessions)
+   * Note: We query by user_id only to maintain memory across logins
    */
   async getSessionHistory(
     sessionId: string,
@@ -313,7 +314,6 @@ export class SupabaseIdentityStore implements IdentityStore {
     const { data, error } = await this.client
       .from('session_turns')
       .select('role, content, created_at')
-      .eq('session_id', sessionId)
       .eq('user_id', userId)
       .order('created_at', { ascending: true });
 
@@ -348,14 +348,14 @@ export class SupabaseIdentityStore implements IdentityStore {
   }
 
   /**
-   * Clear old session turns (keep last N turns per session)
+   * Clear old conversation turns (keep last N turns per user)
+   * Note: We trim by user_id to manage memory across all sessions
    */
   async trimSessionHistory(sessionId: string, userId: string, keepCount: number = 40): Promise<void> {
-    // Get all turns for this session
+    // Get all turns for this user
     const { data: turns } = await this.client
       .from('session_turns')
       .select('id, created_at')
-      .eq('session_id', sessionId)
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
