@@ -27,13 +27,14 @@ export default function ChatPage() {
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [artifacts, setArtifacts] = useState<Array<{ type: string; content: unknown }>>([]);
+  const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Check authentication
+  // Check authentication and load settings
   useEffect(() => {
     const checkAuth = async () => {
       try {
@@ -46,6 +47,22 @@ export default function ChatPage() {
         }
 
         setIsAuthenticated(true);
+
+        // Load avatar settings (user's personal avatar or master default)
+        const [settingsRes, avatarRes] = await Promise.all([
+          fetch('/api/settings'),
+          fetch('/api/settings/avatar'),
+        ]);
+
+        const settingsData = await settingsRes.json();
+        const avatarData = await avatarRes.json();
+
+        // Use personal avatar if set, otherwise use master default
+        if (settingsData.settings?.avatarUrl) {
+          setAvatarUrl(settingsData.settings.avatarUrl);
+        } else if (avatarData.avatarUrl) {
+          setAvatarUrl(avatarData.avatarUrl);
+        }
       } catch {
         router.push('/login');
       } finally {
@@ -332,7 +349,7 @@ export default function ChatPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel - Avatar */}
         <div className="w-1/3 min-w-[300px] max-w-[500px] border-r border-zenna-border flex flex-col items-center justify-center p-8">
-          <Avatar state={zennaState} />
+          <Avatar state={zennaState} avatarUrl={avatarUrl} />
 
           {/* Microphone Button */}
           <button

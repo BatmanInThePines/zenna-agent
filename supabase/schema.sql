@@ -103,8 +103,20 @@ CREATE TABLE IF NOT EXISTS master_config (
   default_brain JSONB DEFAULT '{}'::jsonb,
   immutable_rules TEXT[] DEFAULT ARRAY[]::TEXT[],
   greeting VARCHAR(500) DEFAULT 'Welcome. How may I assist?',
+  default_avatar_url TEXT,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Migration: Add default_avatar_url column if it doesn't exist
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'master_config' AND column_name = 'default_avatar_url'
+  ) THEN
+    ALTER TABLE master_config ADD COLUMN default_avatar_url TEXT;
+  END IF;
+END $$;
 
 -- Insert default master config
 INSERT INTO master_config (id, system_prompt, guardrails, voice, default_brain, immutable_rules, greeting)

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -14,6 +14,12 @@ interface UserSettings {
   integrations?: {
     hue?: { bridgeIp: string; username: string };
   };
+}
+
+interface MasterSettings {
+  defaultAvatarUrl?: string;
+  systemPrompt?: string;
+  greeting?: string;
 }
 
 type SettingsTab = 'general' | 'llm' | 'integrations' | 'master';
@@ -59,6 +65,7 @@ function InfoTooltip({ title, description, howTo }: InfoTooltipProps) {
 export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [settings, setSettings] = useState<UserSettings>({});
+  const [masterSettings, setMasterSettings] = useState<MasterSettings>({});
   const [isFather, setIsFather] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -74,13 +81,26 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   // Hue bridge state
   const [hueStatus, setHueStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
 
+  // Avatar upload refs
+  const masterAvatarInputRef = useRef<HTMLInputElement>(null);
+  const personalAvatarInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const response = await fetch('/api/settings');
-        const data = await response.json();
-        setSettings(data.settings || {});
-        setIsFather(data.isFather || false);
+        const [settingsRes, avatarRes] = await Promise.all([
+          fetch('/api/settings'),
+          fetch('/api/settings/avatar'),
+        ]);
+        const settingsData = await settingsRes.json();
+        const avatarData = await avatarRes.json();
+
+        setSettings(settingsData.settings || {});
+        setIsFather(settingsData.isFather || false);
+        setMasterSettings({
+          defaultAvatarUrl: avatarData.avatarUrl || undefined,
+        });
       } catch {
         setMessage({ type: 'error', text: 'Failed to load settings' });
       } finally {
@@ -207,6 +227,81 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
     } catch {
       setHueStatus('disconnected');
       setMessage({ type: 'error', text: 'Failed to connect to Hue Bridge' });
+    }
+  }, []);
+
+  const handleAvatarUpload = useCallback(async (file: File, target: 'master' | 'personal') => {
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      setMessage({ type: 'error', text: 'Please select an image file' });
+      return;
+    }
+
+    // Validate file size (2MB max)
+    if (file.size > 2 * 1024 * 1024) {
+      setMessage({ type: 'error', text: 'Image too large. Maximum size is 2MB' });
+      return;
+    }
+
+    setIsUploadingAvatar(true);
+    setMessage(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('avatar', file);
+      formData.append('target', target);
+
+      const response = await fetch('/api/settings/avatar', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        if (target === 'master') {
+          setMasterSettings(prev => ({ ...prev, defaultAvatarUrl: data.avatarUrl }));
+        } else {
+          setSettings(prev => ({ ...prev, avatarUrl: data.avatarUrl }));
+        }
+        setMessage({ type: 'success', text: data.message || 'Avatar uploaded!' });
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Failed to upload avatar' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to upload avatar' });
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  }, []);
+
+  const handleRemoveAvatar = useCallback(async (target: 'master' | 'personal') => {
+    setIsSaving(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch(`/api/settings/avatar?target=${target}`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        if (target === 'master') {
+          setMasterSettings(prev => ({ ...prev, defaultAvatarUrl: undefined }));
+        } else {
+          setSettings(prev => ({ ...prev, avatarUrl: undefined }));
+        }
+        setMessage({ type: 'success', text: data.message || 'Avatar removed' });
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Failed to remove avatar' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to remove avatar' });
+    } finally {
+      setIsSaving(false);
     }
   }, []);
 
@@ -344,28 +439,51 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </button>
               </div>
 
-              {/* Avatar Upload */}
+              {/* Personal Avatar Upload */}
               <div>
                 <h3 className="text-sm font-medium mb-3 flex items-center">
-                  Custom Avatar
+                  Personal Avatar
                   <InfoTooltip
                     title="Avatar"
-                    description="Upload a custom PNG image for Zenna's avatar."
-                    howTo="Recommended: Square image, 512x512 or larger."
+                    description="Upload a custom image for your personal avatar (overrides default)."
+                    howTo="Recommended: Square image, 512x512 or larger. Max 2MB."
                   />
                 </h3>
+
+                {/* Current avatar preview */}
+                {settings.avatarUrl && (
+                  <div className="mb-3 flex items-center gap-4">
+                    <img
+                      src={settings.avatarUrl}
+                      alt="Current avatar"
+                      className="w-16 h-16 rounded-full object-cover border border-zenna-border"
+                    />
+                    <button
+                      onClick={() => handleRemoveAvatar('personal')}
+                      disabled={isSaving}
+                      className="text-red-400 text-xs hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+
                 <input
+                  ref={personalAvatarInputRef}
                   type="file"
-                  accept="image/png"
+                  accept="image/*"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) {
-                      // TODO: Implement file upload
-                      setMessage({ type: 'error', text: 'Avatar upload coming soon' });
+                      handleAvatarUpload(file, 'personal');
                     }
                   }}
-                  className="w-full text-sm text-zenna-muted file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-zenna-surface file:text-white hover:file:bg-zenna-accent file:cursor-pointer"
+                  disabled={isUploadingAvatar}
+                  className="w-full text-sm text-zenna-muted file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-zenna-surface file:text-white hover:file:bg-zenna-accent file:cursor-pointer disabled:opacity-50"
                 />
+                {isUploadingAvatar && (
+                  <p className="text-xs text-zenna-muted mt-2">Uploading...</p>
+                )}
               </div>
             </div>
           )}
@@ -534,16 +652,91 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
             <div className="space-y-6">
               <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 mb-6">
                 <p className="text-sm text-yellow-400">
-                  ⚠️ Master settings affect all users. Changes here define Zenna's core behavior.
+                  Master settings affect all users. Changes here define Zenna's core behavior.
                 </p>
               </div>
 
-              <p className="text-sm text-zenna-muted">
-                Master Prompt configuration panel is available in the admin API.
-                Full UI implementation coming soon.
-              </p>
+              {/* Default Avatar Upload */}
+              <div className="glass-card p-4">
+                <h3 className="text-sm font-medium mb-3 flex items-center">
+                  Default Avatar
+                  <InfoTooltip
+                    title="Default Avatar"
+                    description="This avatar is shown for all users unless they set a personal avatar."
+                    howTo="Recommended: Square image, 512x512 or larger. Max 2MB."
+                  />
+                </h3>
 
-              {/* Placeholder for master config UI */}
+                {/* Current master avatar preview */}
+                <div className="flex items-start gap-4 mb-4">
+                  <div className="relative">
+                    {masterSettings.defaultAvatarUrl ? (
+                      <img
+                        src={masterSettings.defaultAvatarUrl}
+                        alt="Default avatar"
+                        className="w-24 h-24 rounded-full object-cover border-2 border-zenna-accent"
+                      />
+                    ) : (
+                      <div className="w-24 h-24 rounded-full bg-zenna-surface border-2 border-dashed border-zenna-border flex items-center justify-center">
+                        <span className="text-3xl text-zenna-muted">Z</span>
+                      </div>
+                    )}
+
+                    {/* Animation preview indicator */}
+                    <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-green-500 rounded-full border-2 border-zenna-bg flex items-center justify-center">
+                      <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                      </svg>
+                    </div>
+                  </div>
+
+                  <div className="flex-1">
+                    <p className="text-xs text-zenna-muted mb-3">
+                      Upload an image to use as Zenna's default avatar. The avatar will animate based on state (idle, listening, thinking, speaking).
+                    </p>
+
+                    <input
+                      ref={masterAvatarInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          handleAvatarUpload(file, 'master');
+                        }
+                      }}
+                      disabled={isUploadingAvatar}
+                      className="hidden"
+                    />
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => masterAvatarInputRef.current?.click()}
+                        disabled={isUploadingAvatar}
+                        className="btn-secondary text-sm"
+                      >
+                        {isUploadingAvatar ? 'Uploading...' : masterSettings.defaultAvatarUrl ? 'Change Avatar' : 'Upload Avatar'}
+                      </button>
+
+                      {masterSettings.defaultAvatarUrl && (
+                        <button
+                          onClick={() => handleRemoveAvatar('master')}
+                          disabled={isSaving}
+                          className="text-red-400 text-sm hover:underline px-3"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-xs text-zenna-muted">
+                  Supported formats: PNG, JPG, GIF, WebP. Animations are applied programmatically.
+                </p>
+              </div>
+
+              {/* System Prompt Placeholder */}
               <div className="glass-card p-4">
                 <h3 className="text-sm font-medium mb-3">System Prompt</h3>
                 <p className="text-xs text-zenna-muted">
@@ -551,6 +744,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </p>
               </div>
 
+              {/* Voice Configuration Placeholder */}
               <div className="glass-card p-4">
                 <h3 className="text-sm font-medium mb-3">Voice Configuration</h3>
                 <p className="text-xs text-zenna-muted">
@@ -558,6 +752,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </p>
               </div>
 
+              {/* User Management Placeholder */}
               <div className="glass-card p-4">
                 <h3 className="text-sm font-medium mb-3">User Management</h3>
                 <p className="text-xs text-zenna-muted">

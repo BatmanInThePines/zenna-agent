@@ -117,6 +117,12 @@ export interface MasterConfig {
    * Greeting message
    */
   greeting: string;
+
+  /**
+   * Default avatar URL (base64 data URL or path)
+   * This avatar is used for all users unless they set a personal avatar
+   */
+  defaultAvatarUrl?: string;
 }
 
 // ============================================

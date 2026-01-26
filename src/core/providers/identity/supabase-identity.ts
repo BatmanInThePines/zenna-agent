@@ -51,6 +51,7 @@ interface DatabaseMasterConfig {
   default_brain: MasterConfig['defaultBrain'];
   immutable_rules: string[];
   greeting: string;
+  default_avatar_url?: string;
   updated_at: string;
 }
 
@@ -284,6 +285,7 @@ export class SupabaseIdentityStore implements IdentityStore {
         default_brain: updated.defaultBrain,
         immutable_rules: updated.immutableRules,
         greeting: updated.greeting,
+        default_avatar_url: updated.defaultAvatarUrl,
         updated_at: new Date().toISOString(),
       })
       .select()
@@ -382,6 +384,7 @@ export class SupabaseIdentityStore implements IdentityStore {
       defaultBrain: data.default_brain,
       immutableRules: data.immutable_rules,
       greeting: data.greeting,
+      defaultAvatarUrl: data.default_avatar_url,
     };
   }
 
