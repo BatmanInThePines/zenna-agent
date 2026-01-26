@@ -39,7 +39,15 @@ export interface UserSettings {
 
   // Smart home integrations (per-user credentials)
   integrations?: {
-    hue?: { bridgeIp: string; username: string };
+    hue?: {
+      // OAuth-based cloud access
+      accessToken?: string;
+      refreshToken?: string;
+      expiresAt?: number;
+      username?: string;
+      // Legacy local access (deprecated)
+      bridgeIp?: string;
+    };
     // Future: unifi, lutron, smartthings
   };
 

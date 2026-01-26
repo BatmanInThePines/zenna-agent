@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
@@ -8,8 +8,15 @@ const identityStore = new SupabaseIdentityStore({
   jwtSecret: process.env.AUTH_SECRET!,
 });
 
-// Philips Hue bridge discovery and connection
-export async function POST() {
+// Philips Hue OAuth Configuration
+// Register your app at https://developers.meethue.com/
+const HUE_CLIENT_ID = process.env.HUE_CLIENT_ID;
+const HUE_CLIENT_SECRET = process.env.HUE_CLIENT_SECRET;
+const HUE_APP_ID = process.env.HUE_APP_ID || 'zenna';
+const HUE_REDIRECT_URI = `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/hue/callback`;
+
+// Step 1: Initiate OAuth - returns the authorization URL
+export async function GET() {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('zenna-session')?.value;
@@ -23,86 +30,147 @@ export async function POST() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Step 1: Discover Hue Bridge via mDNS/UPNP or Hue discovery API
-    const bridgeIp = await discoverHueBridge();
-
-    if (!bridgeIp) {
+    if (!HUE_CLIENT_ID) {
       return NextResponse.json(
-        { success: false, error: 'No Hue Bridge found on the network' },
-        { status: 404 }
+        { error: 'Hue integration not configured. Contact administrator.' },
+        { status: 500 }
       );
     }
 
-    // Step 2: Create user on the bridge (requires button press)
-    const username = await createHueUser(bridgeIp);
+    // Generate state for CSRF protection (store userId in state)
+    const state = Buffer.from(JSON.stringify({
+      userId: payload.userId,
+      timestamp: Date.now(),
+    })).toString('base64');
 
-    if (!username) {
-      return NextResponse.json(
-        { success: false, error: 'Press the button on your Hue Bridge and try again' },
-        { status: 400 }
-      );
-    }
-
-    // Step 3: Save credentials to user settings
-    await identityStore.updateSettings(payload.userId, {
-      integrations: {
-        hue: { bridgeIp, username },
-      },
-    });
+    // Philips Hue OAuth authorization URL
+    const authUrl = new URL('https://api.meethue.com/v2/oauth2/authorize');
+    authUrl.searchParams.set('client_id', HUE_CLIENT_ID);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('state', state);
 
     return NextResponse.json({
-      success: true,
-      bridgeIp,
-      username,
+      authUrl: authUrl.toString(),
+      message: 'Redirect user to this URL to authorize Hue access',
     });
   } catch (error) {
-    console.error('Hue connection error:', error);
+    console.error('Hue OAuth init error:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to connect to Hue Bridge' },
+      { error: 'Failed to initiate Hue connection' },
       { status: 500 }
     );
   }
 }
 
-async function discoverHueBridge(): Promise<string | null> {
+// Step 2: Check connection status
+export async function POST(request: NextRequest) {
   try {
-    // Use Philips Hue discovery portal
-    const response = await fetch('https://discovery.meethue.com/');
-    const bridges = await response.json();
+    const cookieStore = await cookies();
+    const token = cookieStore.get('zenna-session')?.value;
 
-    if (bridges && bridges.length > 0) {
-      return bridges[0].internalipaddress;
+    if (!token) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    return null;
-  } catch {
-    return null;
+    const payload = await identityStore.verifyToken(token);
+    if (!payload) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Get user's Hue credentials
+    const user = await identityStore.getUser(payload.userId);
+    const hueConfig = user?.settings.integrations?.hue;
+
+    if (!hueConfig?.accessToken) {
+      return NextResponse.json({
+        connected: false,
+        message: 'Not connected to Hue',
+      });
+    }
+
+    // Verify token is still valid by making a test request
+    try {
+      const response = await fetch('https://api.meethue.com/route/api/0/config', {
+        headers: {
+          Authorization: `Bearer ${hueConfig.accessToken}`,
+        },
+      });
+
+      if (response.ok) {
+        return NextResponse.json({
+          connected: true,
+          username: hueConfig.username,
+        });
+      }
+
+      // Token expired - try to refresh
+      if (response.status === 401 && hueConfig.refreshToken) {
+        const refreshed = await refreshHueToken(payload.userId, hueConfig.refreshToken);
+        if (refreshed) {
+          return NextResponse.json({
+            connected: true,
+            username: hueConfig.username,
+            message: 'Token refreshed',
+          });
+        }
+      }
+
+      return NextResponse.json({
+        connected: false,
+        message: 'Hue connection expired. Please reconnect.',
+      });
+    } catch {
+      return NextResponse.json({
+        connected: false,
+        message: 'Failed to verify Hue connection',
+      });
+    }
+  } catch (error) {
+    console.error('Hue status check error:', error);
+    return NextResponse.json(
+      { error: 'Failed to check Hue connection' },
+      { status: 500 }
+    );
   }
 }
 
-async function createHueUser(bridgeIp: string): Promise<string | null> {
+async function refreshHueToken(userId: string, refreshToken: string): Promise<boolean> {
+  if (!HUE_CLIENT_ID || !HUE_CLIENT_SECRET) {
+    return false;
+  }
+
   try {
-    const response = await fetch(`http://${bridgeIp}/api`, {
+    const response = await fetch('https://api.meethue.com/v2/oauth2/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        devicetype: 'zenna#agent',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Basic ${Buffer.from(`${HUE_CLIENT_ID}:${HUE_CLIENT_SECRET}`).toString('base64')}`,
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
       }),
     });
 
-    const result = await response.json();
-
-    if (result[0]?.success?.username) {
-      return result[0].success.username;
+    if (!response.ok) {
+      return false;
     }
 
-    // Link button not pressed
-    if (result[0]?.error?.type === 101) {
-      return null;
-    }
+    const tokens = await response.json();
 
-    return null;
+    // Update stored tokens
+    await identityStore.updateSettings(userId, {
+      integrations: {
+        hue: {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiresAt: Date.now() + tokens.expires_in * 1000,
+        },
+      },
+    });
+
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }

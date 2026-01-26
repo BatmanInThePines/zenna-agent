@@ -68,16 +68,25 @@ export async function POST(request: NextRequest) {
       timestamp: new Date(),
     });
 
-    // Get brain provider
-    const brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId;
-    const brainApiKey = user.settings.brainApiKey || masterConfig.defaultBrain.apiKey || process.env.GOOGLE_AI_API_KEY!;
+    // Get brain provider - default to gemini-2.5-flash
+    const brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId || 'gemini-2.5-flash';
+    const brainApiKey = user.settings.brainApiKey || masterConfig.defaultBrain.apiKey || process.env.GOOGLE_AI_API_KEY;
+
+    if (!brainApiKey) {
+      console.error('No API key configured for brain provider');
+      return NextResponse.json({ error: 'LLM not configured' }, { status: 500 });
+    }
+
+    console.log(`Using brain provider: ${brainProviderId}`);
 
     const brainProvider = brainProviderFactory.create(brainProviderId, {
       apiKey: brainApiKey,
     });
 
     // Generate response
+    console.log('Generating response...');
     const response = await brainProvider.generateResponse(history);
+    console.log('Response generated successfully');
 
     // Add assistant response to history
     history.push({
