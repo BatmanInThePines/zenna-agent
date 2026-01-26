@@ -12,7 +12,12 @@ interface UserSettings {
   personalPrompt?: string;
   avatarUrl?: string;
   integrations?: {
-    hue?: { bridgeIp: string; username: string };
+    hue?: {
+      accessToken?: string;
+      refreshToken?: string;
+      expiresAt?: number;
+      username?: string;
+    };
   };
 }
 
@@ -101,6 +106,11 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
         setMasterSettings({
           defaultAvatarUrl: avatarData.avatarUrl || undefined,
         });
+
+        // Check if Hue is connected
+        if (settingsData.settings?.integrations?.hue?.accessToken) {
+          setHueStatus('connected');
+        }
       } catch {
         setMessage({ type: 'error', text: 'Failed to load settings' });
       } finally {
@@ -204,29 +214,39 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
     setHueStatus('connecting');
 
     try {
+      // Get OAuth authorization URL from the API
       const response = await fetch('/api/integrations/hue/connect', {
-        method: 'POST',
+        method: 'GET',
       });
 
       const data = await response.json();
 
-      if (data.success) {
-        setHueStatus('connected');
-        setSettings(prev => ({
-          ...prev,
-          integrations: {
-            ...prev.integrations,
-            hue: { bridgeIp: data.bridgeIp, username: data.username },
-          },
-        }));
-        setMessage({ type: 'success', text: 'Hue Bridge connected!' });
-      } else {
+      if (data.authUrl) {
+        // Redirect user to Hue OAuth authorization page
+        window.location.href = data.authUrl;
+      } else if (data.error) {
         setHueStatus('disconnected');
-        setMessage({ type: 'error', text: data.error || 'Failed to connect' });
+        setMessage({ type: 'error', text: data.error });
       }
     } catch {
       setHueStatus('disconnected');
-      setMessage({ type: 'error', text: 'Failed to connect to Hue Bridge' });
+      setMessage({ type: 'error', text: 'Failed to initiate Hue connection' });
+    }
+  }, []);
+
+  // Check Hue connection status on mount
+  const checkHueStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/integrations/hue/connect', {
+        method: 'POST',
+      });
+      const data = await response.json();
+
+      if (data.connected) {
+        setHueStatus('connected');
+      }
+    } catch {
+      // Ignore errors on status check
     }
   }, []);
 
@@ -572,37 +592,63 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                     Philips Hue
                     <InfoTooltip
                       title="Philips Hue"
-                      description="Connect your Hue Bridge to control lights with voice commands."
-                      howTo="Press the button on your Hue Bridge, then click Connect."
+                      description="Connect your Philips Hue account to control lights with voice commands."
+                      howTo="Click Connect to sign in with your Hue account."
                     />
                   </h3>
                   <span className={`text-xs px-2 py-1 rounded-full ${
-                    settings.integrations?.hue
+                    hueStatus === 'connected'
                       ? 'bg-green-500/20 text-green-400'
                       : 'bg-zenna-surface text-zenna-muted'
                   }`}>
-                    {settings.integrations?.hue ? 'Connected' : 'Not Connected'}
+                    {hueStatus === 'connected' ? 'Connected' : 'Not Connected'}
                   </span>
                 </div>
 
-                {settings.integrations?.hue ? (
+                {hueStatus === 'connected' ? (
                   <div className="text-sm text-zenna-muted">
-                    <p>Bridge IP: {settings.integrations.hue.bridgeIp}</p>
+                    <p className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Connected to Philips Hue Cloud
+                    </p>
+                    <p className="text-xs mt-2">You can now control your Hue lights with voice commands.</p>
                     <button
-                      onClick={() => saveSettings({ integrations: { ...settings.integrations, hue: undefined } })}
-                      className="text-red-400 text-xs mt-2 hover:underline"
+                      onClick={() => {
+                        saveSettings({ integrations: { ...settings.integrations, hue: undefined } });
+                        setHueStatus('disconnected');
+                      }}
+                      className="text-red-400 text-xs mt-3 hover:underline"
                     >
                       Disconnect
                     </button>
                   </div>
                 ) : (
-                  <button
-                    onClick={connectHueBridge}
-                    disabled={hueStatus === 'connecting'}
-                    className="btn-secondary text-sm"
-                  >
-                    {hueStatus === 'connecting' ? 'Connecting...' : 'Connect Hue Bridge'}
-                  </button>
+                  <div>
+                    <p className="text-xs text-zenna-muted mb-3">
+                      Sign in with your Philips Hue account to allow Zenna to control your lights.
+                    </p>
+                    <button
+                      onClick={connectHueBridge}
+                      disabled={hueStatus === 'connecting'}
+                      className="btn-secondary text-sm flex items-center gap-2"
+                    >
+                      {hueStatus === 'connecting' ? (
+                        <>
+                          <span className="spinner-sm" />
+                          Redirecting...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                          </svg>
+                          Connect with Hue Account
+                        </>
+                      )}
+                    </button>
+                  </div>
                 )}
               </div>
 

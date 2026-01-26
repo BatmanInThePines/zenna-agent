@@ -12,9 +12,6 @@ const identityStore = new SupabaseIdentityStore({
   jwtSecret: process.env.AUTH_SECRET!,
 });
 
-// Simple in-memory conversation history (should be replaced with proper session storage)
-const conversationHistories = new Map<string, Message[]>();
-
 export async function POST(request: NextRequest) {
   try {
     // Verify authentication
@@ -46,27 +43,36 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Get or create conversation history
-    const sessionKey = payload.sessionId;
-    let history = conversationHistories.get(sessionKey);
+    // Get conversation history from Supabase
+    const sessionId = payload.sessionId;
+    const storedHistory = await identityStore.getSessionHistory(sessionId, payload.userId);
 
-    if (!history) {
-      // Initialize with system prompt
-      history = [
-        {
-          role: 'system',
-          content: buildSystemPrompt(masterConfig, user.settings),
-        },
-      ];
-      conversationHistories.set(sessionKey, history);
+    // Build message history for LLM
+    const systemPrompt = buildSystemPrompt(masterConfig, user.settings);
+    const history: Message[] = [
+      { role: 'system', content: systemPrompt },
+    ];
+
+    // Add stored conversation history
+    for (const turn of storedHistory) {
+      if (turn.role === 'user' || turn.role === 'assistant') {
+        history.push({
+          role: turn.role,
+          content: turn.content,
+          timestamp: new Date(turn.created_at),
+        });
+      }
     }
 
-    // Add user message to history
+    // Add current user message
     history.push({
       role: 'user',
       content: message,
       timestamp: new Date(),
     });
+
+    // Save user message to Supabase
+    await identityStore.addSessionTurn(sessionId, payload.userId, 'user', message);
 
     // Get brain provider - default to gemini-2.5-flash
     const brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId || 'gemini-2.5-flash';
@@ -88,18 +94,11 @@ export async function POST(request: NextRequest) {
     const response = await brainProvider.generateResponse(history);
     console.log('Response generated successfully');
 
-    // Add assistant response to history
-    history.push({
-      role: 'assistant',
-      content: response.content,
-      timestamp: new Date(),
-    });
+    // Save assistant response to Supabase
+    await identityStore.addSessionTurn(sessionId, payload.userId, 'assistant', response.content);
 
-    // Keep history manageable (last 20 messages + system prompt)
-    if (history.length > 21) {
-      history = [history[0], ...history.slice(-20)];
-      conversationHistories.set(sessionKey, history);
-    }
+    // Trim old history to keep session manageable (keep last 40 turns)
+    await identityStore.trimSessionHistory(sessionId, payload.userId, 40);
 
     // Generate TTS audio
     let audioUrl: string | undefined;

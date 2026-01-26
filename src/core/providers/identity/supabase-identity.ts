@@ -304,6 +304,69 @@ export class SupabaseIdentityStore implements IdentityStore {
   }
 
   /**
+   * Get session conversation history
+   */
+  async getSessionHistory(
+    sessionId: string,
+    userId: string
+  ): Promise<Array<{ role: string; content: string; created_at: string }>> {
+    const { data, error } = await this.client
+      .from('session_turns')
+      .select('role, content, created_at')
+      .eq('session_id', sessionId)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching session history:', error);
+      return [];
+    }
+
+    return data || [];
+  }
+
+  /**
+   * Add a turn to session conversation history
+   */
+  async addSessionTurn(
+    sessionId: string,
+    userId: string,
+    role: 'user' | 'assistant' | 'system',
+    content: string
+  ): Promise<void> {
+    const { error } = await this.client.from('session_turns').insert({
+      session_id: sessionId,
+      user_id: userId,
+      role,
+      content,
+      created_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      console.error('Error saving session turn:', error);
+    }
+  }
+
+  /**
+   * Clear old session turns (keep last N turns per session)
+   */
+  async trimSessionHistory(sessionId: string, userId: string, keepCount: number = 40): Promise<void> {
+    // Get all turns for this session
+    const { data: turns } = await this.client
+      .from('session_turns')
+      .select('id, created_at')
+      .eq('session_id', sessionId)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (turns && turns.length > keepCount) {
+      // Delete older turns beyond keepCount
+      const idsToDelete = turns.slice(keepCount).map(t => t.id);
+      await this.client.from('session_turns').delete().in('id', idsToDelete);
+    }
+  }
+
+  /**
    * Generate JWT token for authenticated session
    */
   async generateToken(user: User, session: UserSession): Promise<string> {
