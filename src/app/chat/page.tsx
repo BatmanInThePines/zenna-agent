@@ -21,6 +21,7 @@ export default function ChatPage() {
   const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSessionStarted, setIsSessionStarted] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [zennaState, setZennaState] = useState<ZennaState>('idle');
   const [currentTranscript, setCurrentTranscript] = useState('');
@@ -54,44 +55,48 @@ export default function ChatPage() {
     checkAuth();
   }, [router]);
 
-  // Initialize Zenna and play greeting
-  useEffect(() => {
-    if (!isAuthenticated) return;
+  // Start session handler - called when user clicks "Begin Session"
+  const handleStartSession = useCallback(async () => {
+    // Initialize audio context on user interaction (required by browsers)
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContext();
+    }
 
-    const initializeZenna = async () => {
-      try {
-        // Get greeting and play it
-        const response = await fetch('/api/zenna/greet', { method: 'POST' });
-        const data = await response.json();
+    setIsSessionStarted(true);
 
-        if (data.greeting) {
-          setZennaState('speaking');
+    try {
+      // Get greeting and play it
+      const response = await fetch('/api/zenna/greet', { method: 'POST' });
+      const data = await response.json();
 
-          // Add greeting to messages
-          setMessages([{
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: data.greeting,
-            timestamp: new Date(),
-          }]);
+      if (data.greeting) {
+        setZennaState('speaking');
 
-          // Play audio if available
-          if (data.audioUrl) {
-            const audio = new Audio(data.audioUrl);
-            audio.onended = () => setZennaState('idle');
-            await audio.play();
-          } else {
+        // Add greeting to messages
+        setMessages([{
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: data.greeting,
+          timestamp: new Date(),
+        }]);
+
+        // Play audio if available
+        if (data.audioUrl) {
+          const audio = new Audio(data.audioUrl);
+          audio.onended = () => setZennaState('idle');
+          await audio.play().catch((err) => {
+            console.error('Audio playback failed:', err);
             setZennaState('idle');
-          }
+          });
+        } else {
+          setZennaState('idle');
         }
-      } catch (error) {
-        console.error('Failed to initialize Zenna:', error);
-        setZennaState('idle');
       }
-    };
-
-    initializeZenna();
-  }, [isAuthenticated]);
+    } catch (error) {
+      console.error('Failed to initialize Zenna:', error);
+      setZennaState('idle');
+    }
+  }, []);
 
   // Handle microphone button click
   const handleMicClick = useCallback(async () => {
@@ -236,6 +241,33 @@ export default function ChatPage() {
 
   if (!isAuthenticated) {
     return null;
+  }
+
+  // Show "Begin Session" screen before starting
+  if (!isSessionStarted) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-gradient-to-b from-zenna-bg to-black">
+        <div className="text-center">
+          <h1 className="text-4xl font-light tracking-widest mb-4">ZENNA</h1>
+          <p className="text-zenna-muted mb-8">Voice-first AI Assistant</p>
+
+          <button
+            onClick={handleStartSession}
+            className="px-8 py-4 bg-zenna-accent hover:bg-indigo-600 rounded-full text-lg font-medium transition-all transform hover:scale-105 flex items-center gap-3 mx-auto"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Begin Session
+          </button>
+
+          <p className="text-xs text-zenna-muted mt-6">
+            Click to enable voice interaction
+          </p>
+        </div>
+      </main>
+    );
   }
 
   return (
