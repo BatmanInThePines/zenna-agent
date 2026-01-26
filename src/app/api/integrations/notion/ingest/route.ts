@@ -181,7 +181,7 @@ async function processNotionPages(userId: string, pageIds: string[], notionToken
             content: chunk,
             metadata: {
               type: 'fact',
-              source: 'notion',
+              source: 'external',
               topic: pageContent.title,
               tags: ['notion', 'knowledge-base'],
             },
@@ -230,6 +230,7 @@ async function updateProgress(
           ...user.settings.externalContext,
           notion: {
             ...user.settings.externalContext?.notion,
+            enabled: user.settings.externalContext?.notion?.enabled ?? true,
             ingestionStatus: status,
             ingestionProgress: progress,
           },

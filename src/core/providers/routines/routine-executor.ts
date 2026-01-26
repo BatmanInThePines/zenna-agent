@@ -113,6 +113,9 @@ export class RoutineExecutor {
     // Refresh token if expired
     let accessToken = hueConfig.accessToken;
     if (hueConfig.expiresAt && hueConfig.expiresAt < Date.now()) {
+      if (!hueConfig.refreshToken) {
+        throw new Error('Hue refresh token not available');
+      }
       accessToken = await this.refreshHueToken(hueConfig.refreshToken, userId);
     }
 

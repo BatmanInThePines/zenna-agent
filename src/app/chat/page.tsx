@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Avatar, { type EmotionType } from '@/components/Avatar';
 import Transcript from '@/components/Transcript';
@@ -19,7 +19,8 @@ interface Message {
 
 type ZennaState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
-export default function ChatPage() {
+// Wrapper component to handle Suspense for useSearchParams
+function ChatPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -567,5 +568,21 @@ export default function ChatPage() {
         </div>
       )}
     </main>
+  );
+}
+
+// Main export with Suspense boundary for useSearchParams
+export default function ChatPage() {
+  return (
+    <Suspense fallback={
+      <main className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="spinner mx-auto mb-4" />
+          <p className="text-zenna-muted">Loading Zenna...</p>
+        </div>
+      </main>
+    }>
+      <ChatPageContent />
+    </Suspense>
   );
 }
