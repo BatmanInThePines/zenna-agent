@@ -3,6 +3,8 @@ import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import { brainProviderFactory } from '@/core/providers/brain';
 import { ElevenLabsTTSProvider } from '@/core/providers/voice/elevenlabs-tts';
+import { RoutineStore } from '@/core/providers/routines/routine-store';
+import { INTEGRATION_MANIFESTS, getIntegrationContextSummary } from '@/core/interfaces/integration-manifest';
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
 
@@ -94,8 +96,19 @@ export async function POST(request: NextRequest) {
     const response = await brainProvider.generateResponse(history);
     console.log('Response generated successfully');
 
+    // Check for action blocks in response (e.g., schedule creation)
+    let responseText = response.content;
+    const actionResult = await processActionBlocks(response.content, payload.userId, user.settings);
+    if (actionResult) {
+      responseText = actionResult.cleanedResponse;
+      // If action was processed, add confirmation to response
+      if (actionResult.actionConfirmation) {
+        responseText = actionResult.actionConfirmation;
+      }
+    }
+
     // Save assistant response to Supabase
-    await identityStore.addSessionTurn(sessionId, payload.userId, 'assistant', response.content);
+    await identityStore.addSessionTurn(sessionId, payload.userId, 'assistant', responseText);
 
     // Trim old history to keep session manageable (keep last 40 turns)
     await identityStore.trimSessionHistory(sessionId, payload.userId, 40);
@@ -103,35 +116,174 @@ export async function POST(request: NextRequest) {
     // Generate TTS audio
     let audioUrl: string | undefined;
 
-    if (process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID) {
+    const hasElevenLabsKey = !!process.env.ELEVENLABS_API_KEY;
+    const hasElevenLabsVoice = !!process.env.ELEVENLABS_VOICE_ID;
+
+    if (!hasElevenLabsKey || !hasElevenLabsVoice) {
+      console.warn('TTS disabled - missing env vars:', {
+        ELEVENLABS_API_KEY: hasElevenLabsKey ? 'set' : 'MISSING',
+        ELEVENLABS_VOICE_ID: hasElevenLabsVoice ? 'set' : 'MISSING',
+      });
+    }
+
+    if (hasElevenLabsKey && hasElevenLabsVoice) {
       try {
+        console.log('Generating TTS audio...');
         const ttsProvider = new ElevenLabsTTSProvider({
-          apiKey: process.env.ELEVENLABS_API_KEY,
-          voiceId: process.env.ELEVENLABS_VOICE_ID,
+          apiKey: process.env.ELEVENLABS_API_KEY!,
+          voiceId: process.env.ELEVENLABS_VOICE_ID!,
         });
 
-        const result = await ttsProvider.synthesize(response.content);
+        const result = await ttsProvider.synthesize(responseText);
 
-        // Convert audio buffer to base64 data URL
-        const base64 = Buffer.from(result.audioBuffer).toString('base64');
-        audioUrl = `data:audio/mpeg;base64,${base64}`;
+        if (!result.audioBuffer || result.audioBuffer.byteLength === 0) {
+          console.error('TTS returned empty audio buffer');
+        } else {
+          console.log(`TTS audio generated: ${result.audioBuffer.byteLength} bytes`);
+          // Convert audio buffer to base64 data URL
+          const base64 = Buffer.from(result.audioBuffer).toString('base64');
+          audioUrl = `data:audio/mpeg;base64,${base64}`;
+        }
       } catch (error) {
-        console.error('TTS error:', error);
+        console.error('TTS synthesis error:', error);
         // Continue without audio
       }
     }
 
     // Analyze response tone/emotion for avatar color
-    const emotion = analyzeEmotion(response.content);
+    const emotion = analyzeEmotion(responseText);
 
     return NextResponse.json({
-      response: response.content,
+      response: responseText,
       audioUrl,
       emotion,
     });
   } catch (error) {
     console.error('Chat error:', error);
     return NextResponse.json({ error: 'Failed to process message' }, { status: 500 });
+  }
+}
+
+// Process action blocks in LLM response (e.g., schedule creation, light control)
+async function processActionBlocks(
+  responseContent: string,
+  userId: string,
+  userSettings: UserSettings
+): Promise<{ cleanedResponse: string; actionConfirmation?: string } | null> {
+  // Look for JSON action blocks
+  const jsonBlockRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
+  const matches = [...responseContent.matchAll(jsonBlockRegex)];
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  let actionConfirmation: string | undefined;
+
+  for (const match of matches) {
+    try {
+      const actionData = JSON.parse(match[1]);
+
+      if (actionData.action === 'create_schedule') {
+        // Create a scheduled routine
+        const routineStore = new RoutineStore({
+          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        });
+
+        const scheduleType = actionData.schedule_type || 'daily';
+        const routine = await routineStore.createRoutine({
+          userId,
+          integrationId: actionData.integration,
+          actionId: actionData.actionId,
+          name: `${actionData.actionId === 'turn-on' ? 'Turn on' : actionData.actionId === 'turn-off' ? 'Turn off' : 'Activate'} ${actionData.parameters?.target || 'lights'} at ${actionData.time}`,
+          description: `Scheduled ${scheduleType} routine`,
+          schedule: {
+            type: scheduleType,
+            time: actionData.time,
+            daysOfWeek: actionData.daysOfWeek,
+          },
+          parameters: actionData.parameters || {},
+          enabled: true,
+        });
+
+        console.log(`Created schedule: ${routine.name}`);
+        actionConfirmation = `I've set up a ${scheduleType} schedule to ${actionData.actionId === 'turn-on' ? 'turn on' : actionData.actionId === 'turn-off' ? 'turn off' : 'control'} your ${actionData.parameters?.target || 'lights'} at ${actionData.time}. I'll remember to do this automatically!`;
+      } else if (actionData.action === 'control_lights') {
+        // Immediate light control
+        const hueConfig = userSettings.integrations?.hue;
+        if (hueConfig?.accessToken) {
+          await executeHueCommand(hueConfig, actionData);
+          actionConfirmation = `Done! I've ${actionData.state === 'on' ? 'turned on' : 'turned off'} the ${actionData.target || 'lights'}.`;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to process action block:', error);
+    }
+  }
+
+  // Remove action blocks from response for cleaner text
+  const cleanedResponse = responseContent.replace(jsonBlockRegex, '').trim();
+
+  return {
+    cleanedResponse: actionConfirmation || cleanedResponse,
+    actionConfirmation,
+  };
+}
+
+// Execute immediate Hue command
+async function executeHueCommand(
+  hueConfig: NonNullable<UserSettings['integrations']>['hue'],
+  command: { target?: string; state?: string; brightness?: number; scene?: string }
+): Promise<void> {
+  if (!hueConfig?.accessToken) {
+    throw new Error('Hue not connected');
+  }
+
+  // Get lights
+  const lightsResponse = await fetch(
+    'https://api.meethue.com/route/clip/v2/resource/light',
+    {
+      headers: {
+        Authorization: `Bearer ${hueConfig.accessToken}`,
+        'hue-application-key': hueConfig.username || '',
+      },
+    }
+  );
+
+  if (!lightsResponse.ok) {
+    throw new Error('Failed to get lights');
+  }
+
+  const lightsData = await lightsResponse.json();
+  const targetLower = (command.target || '').toLowerCase();
+
+  // Find matching light
+  const light = lightsData.data?.find((l: { metadata?: { name?: string } }) =>
+    l.metadata?.name?.toLowerCase().includes(targetLower)
+  );
+
+  if (light) {
+    const stateUpdate: Record<string, unknown> = {
+      on: { on: command.state === 'on' },
+    };
+
+    if (command.brightness !== undefined) {
+      stateUpdate.dimming = { brightness: command.brightness };
+    }
+
+    await fetch(
+      `https://api.meethue.com/route/clip/v2/resource/light/${light.id}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${hueConfig.accessToken}`,
+          'hue-application-key': hueConfig.username || '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(stateUpdate),
+      }
+    );
   }
 }
 
@@ -323,6 +475,43 @@ function buildSystemPrompt(
   // Add guardrails
   if (masterConfig.guardrails.blockedTopics?.length) {
     prompt += `\n\nDo not discuss: ${masterConfig.guardrails.blockedTopics.join(', ')}`;
+  }
+
+  // Add connected integrations context
+  const connectedIntegrations: string[] = [];
+
+  if (userSettings.integrations?.hue?.accessToken) {
+    connectedIntegrations.push('hue');
+    prompt += `\n\n## Philips Hue Integration (CONNECTED)
+You can control the user's Philips Hue lights. Available actions:
+- Turn lights on/off (say "turn on the [room/light name] lights" or "turn off the lights")
+- Adjust brightness (say "dim the lights to 50%" or "set brightness to 80%")
+- Change colors (for color-capable lights)
+- Activate scenes (say "activate the [scene name] scene")
+
+You can also CREATE SCHEDULES for the user. When they ask to schedule light actions:
+- Extract the time (e.g., "7 AM", "sunset", "10:30 PM")
+- Extract the action (turn on, turn off, dim, scene)
+- Extract the target (which lights or rooms)
+- Confirm the schedule with the user before creating it
+
+When the user wants to schedule something, respond with a JSON action block like:
+\`\`\`json
+{"action": "create_schedule", "integration": "hue", "actionId": "turn-on", "time": "07:00", "schedule_type": "daily", "parameters": {"target": "bedroom", "brightness": 100}}
+\`\`\`
+
+Schedule types: "once", "daily", "weekly" (with daysOfWeek: [0-6] where 0=Sunday)`;
+  }
+
+  if (userSettings.externalContext?.notion?.token) {
+    connectedIntegrations.push('notion');
+    prompt += `\n\n## Notion Integration (CONNECTED)
+The user has connected their Notion workspace. You have access to their knowledge base.
+When they ask questions that might relate to their notes, you can reference this information.`;
+  }
+
+  if (connectedIntegrations.length > 0) {
+    prompt += `\n\nConnected integrations: ${connectedIntegrations.join(', ')}`;
   }
 
   // Add user's personal prompt

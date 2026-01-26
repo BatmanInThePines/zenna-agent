@@ -221,3 +221,70 @@ button {
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+
+/* ============================================
+   NEW INTEGRATION CELEBRATION ANIMATIONS
+   ============================================ */
+
+/* Outer glow expansion */
+@keyframes integrationGlow {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+
+/* Spinning conic gradient ring */
+@keyframes integrationSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Pulsing border */
+@keyframes integrationPulse {
+  0%, 100% {
+    border-color: rgba(255, 215, 0, 0.6);
+    box-shadow: 0 0 30px rgba(255, 215, 0, 0.5), inset 0 0 20px rgba(255, 215, 0, 0.2);
+  }
+  50% {
+    border-color: rgba(16, 185, 129, 0.6);
+    box-shadow: 0 0 40px rgba(16, 185, 129, 0.6), inset 0 0 30px rgba(16, 185, 129, 0.3);
+  }
+}
+
+/* Floating sparkles */
+@keyframes integrationSparkle {
+  0%, 100% {
+    opacity: 0.3;
+    transform: rotate(var(--rotation, 0deg)) translateY(-170px) scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: rotate(var(--rotation, 0deg)) translateY(-180px) scale(1.2);
+  }
+}
+
+/* Integration connection success flash */
+@keyframes integrationFlash {
+  0% {
+    background: transparent;
+  }
+  10% {
+    background: rgba(255, 215, 0, 0.2);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+.integration-flash {
+  animation: integrationFlash 1s ease-out;
+}

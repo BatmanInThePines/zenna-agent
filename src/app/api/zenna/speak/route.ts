@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import { ElevenLabsTTSProvider } from '@/core/providers/voice/elevenlabs-tts';
@@ -9,7 +9,11 @@ const identityStore = new SupabaseIdentityStore({
   jwtSecret: process.env.AUTH_SECRET!,
 });
 
-export async function POST() {
+/**
+ * Speak endpoint - converts text to speech without LLM processing
+ * Used for speaking pre-defined messages (e.g., integration education)
+ */
+export async function POST(request: NextRequest) {
   try {
     // Verify authentication
     const cookieStore = await cookies();
@@ -24,11 +28,13 @@ export async function POST() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Get master config for greeting
-    const masterConfig = await identityStore.getMasterConfig();
-    const greeting = masterConfig.greeting || 'Welcome. How may I assist?';
+    const { text } = await request.json();
 
-    // Generate TTS audio for greeting
+    if (!text || typeof text !== 'string') {
+      return NextResponse.json({ error: 'Text is required' }, { status: 400 });
+    }
+
+    // Generate TTS audio
     let audioUrl: string | undefined;
 
     const hasElevenLabsKey = !!process.env.ELEVENLABS_API_KEY;
@@ -43,35 +49,34 @@ export async function POST() {
 
     if (hasElevenLabsKey && hasElevenLabsVoice) {
       try {
-        console.log('Generating TTS audio for greeting...');
+        console.log('Generating TTS audio for speak request...');
         const ttsProvider = new ElevenLabsTTSProvider({
           apiKey: process.env.ELEVENLABS_API_KEY!,
           voiceId: process.env.ELEVENLABS_VOICE_ID!,
         });
 
-        const result = await ttsProvider.synthesize(greeting);
+        const result = await ttsProvider.synthesize(text);
 
         if (!result.audioBuffer || result.audioBuffer.byteLength === 0) {
-          console.error('TTS returned empty audio buffer for greeting');
+          console.error('TTS returned empty audio buffer');
         } else {
-          console.log(`TTS greeting audio generated: ${result.audioBuffer.byteLength} bytes`);
+          console.log(`TTS audio generated: ${result.audioBuffer.byteLength} bytes`);
           // Convert audio buffer to base64 data URL
           const base64 = Buffer.from(result.audioBuffer).toString('base64');
           audioUrl = `data:audio/mpeg;base64,${base64}`;
         }
       } catch (error) {
-        console.error('TTS greeting synthesis error:', error);
+        console.error('TTS synthesis error:', error);
         // Continue without audio
       }
     }
 
     return NextResponse.json({
-      greeting,
       audioUrl,
-      emotion: 'helpful', // Default greeting emotion
+      success: true,
     });
   } catch (error) {
-    console.error('Greet error:', error);
-    return NextResponse.json({ error: 'Failed to generate greeting' }, { status: 500 });
+    console.error('Speak error:', error);
+    return NextResponse.json({ error: 'Failed to generate speech' }, { status: 500 });
   }
 }

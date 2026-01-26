@@ -207,3 +207,40 @@ BEGIN
   GROUP BY c.id;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ============================================
+-- SCHEDULED ROUTINES TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS scheduled_routines (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  integration_id VARCHAR(100) NOT NULL,
+  action_id VARCHAR(100) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  schedule JSONB NOT NULL,
+  parameters JSONB DEFAULT '{}'::jsonb,
+  enabled BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  last_executed_at TIMESTAMP WITH TIME ZONE,
+  next_execution_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Indexes for routine lookup
+CREATE INDEX IF NOT EXISTS idx_scheduled_routines_user_id ON scheduled_routines(user_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_routines_integration_id ON scheduled_routines(integration_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_routines_enabled ON scheduled_routines(enabled);
+CREATE INDEX IF NOT EXISTS idx_scheduled_routines_next_execution ON scheduled_routines(next_execution_at);
+
+-- Index for finding due routines
+CREATE INDEX IF NOT EXISTS idx_scheduled_routines_due ON scheduled_routines(enabled, next_execution_at)
+  WHERE enabled = true;
+
+-- Enable RLS
+ALTER TABLE scheduled_routines ENABLE ROW LEVEL SECURITY;
+
+-- Users can only see their own routines
+CREATE POLICY scheduled_routines_own_data ON scheduled_routines
+  FOR ALL
+  USING (user_id = auth.uid());

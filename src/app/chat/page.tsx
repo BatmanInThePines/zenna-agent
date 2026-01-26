@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Avatar, { type EmotionType } from '@/components/Avatar';
 import Transcript from '@/components/Transcript';
 import ArtifactCanvas from '@/components/ArtifactCanvas';
 import ChatInput from '@/components/ChatInput';
 import SettingsPanel from '@/components/SettingsPanel';
+import KnowledgeIngestionIndicator from '@/components/KnowledgeIngestionIndicator';
+import { INTEGRATION_MANIFESTS, getIntegrationEducation } from '@/core/interfaces/integration-manifest';
 
 interface Message {
   id: string;
@@ -19,6 +21,7 @@ type ZennaState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
 export default function ChatPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSessionStarted, setIsSessionStarted] = useState(false);
@@ -29,6 +32,11 @@ export default function ChatPage() {
   const [artifacts, setArtifacts] = useState<Array<{ type: string; content: unknown }>>([]);
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const [currentEmotion, setCurrentEmotion] = useState<EmotionType>('neutral');
+
+  // Integration onboarding state
+  const [newIntegration, setNewIntegration] = useState<string | null>(null);
+  const [showEducationPrompt, setShowEducationPrompt] = useState(false);
+  const [pendingEducationIntegration, setPendingEducationIntegration] = useState<string | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -73,6 +81,91 @@ export default function ChatPage() {
 
     checkAuth();
   }, [router]);
+
+  // Check for new integration connections from URL params
+  useEffect(() => {
+    const hueConnected = searchParams.get('hue_connected');
+    const notionConnected = searchParams.get('notion_connected');
+
+    if (hueConnected === 'true') {
+      handleNewIntegration('hue');
+      // Clean URL without reloading
+      window.history.replaceState({}, '', '/chat');
+    } else if (notionConnected === 'true') {
+      handleNewIntegration('notion');
+      window.history.replaceState({}, '', '/chat');
+    }
+  }, [searchParams]);
+
+  // Handle new integration connection - trigger glow and education prompt
+  const handleNewIntegration = useCallback((integrationId: string) => {
+    const manifest = INTEGRATION_MANIFESTS[integrationId];
+    if (!manifest) return;
+
+    // Trigger avatar celebration glow
+    setNewIntegration(integrationId);
+    setCurrentEmotion('joy');
+
+    // Show education prompt after a short delay
+    setTimeout(() => {
+      setPendingEducationIntegration(integrationId);
+      setShowEducationPrompt(true);
+    }, 1500);
+
+    // Clear glow after 10 seconds if user doesn't respond
+    setTimeout(() => {
+      setNewIntegration(null);
+    }, 10000);
+  }, []);
+
+  // Handle education response
+  const handleEducationResponse = useCallback(async (accepted: boolean) => {
+    setShowEducationPrompt(false);
+
+    if (accepted && pendingEducationIntegration) {
+      // Generate education content
+      const education = getIntegrationEducation(pendingEducationIntegration);
+      const manifest = INTEGRATION_MANIFESTS[pendingEducationIntegration];
+
+      // Add Zenna's education message
+      const educationMessage: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: education,
+        timestamp: new Date(),
+      };
+
+      setMessages(prev => [...prev, educationMessage]);
+      setZennaState('speaking');
+      setCurrentEmotion('helpful');
+
+      // Optionally speak the education (summarized version)
+      try {
+        const response = await fetch('/api/zenna/speak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: `Great news! I'm now connected to your ${manifest?.name}. ${manifest?.description} Would you like me to show you what I can do?`,
+          }),
+        });
+
+        const data = await response.json();
+        if (data.audioUrl) {
+          const audio = new Audio(data.audioUrl);
+          audio.onended = () => setZennaState('idle');
+          await audio.play().catch(() => setZennaState('idle'));
+        } else {
+          setZennaState('idle');
+        }
+      } catch {
+        setZennaState('idle');
+      }
+    }
+
+    // Clear the glow effect
+    setNewIntegration(null);
+    setPendingEducationIntegration(null);
+  }, [pendingEducationIntegration]);
 
   // Start session handler - called when user clicks "Begin Session"
   const handleStartSession = useCallback(async () => {
@@ -165,10 +258,20 @@ export default function ChatPage() {
 
         // Play audio response
         if (data.audioUrl) {
-          const audio = new Audio(data.audioUrl);
-          audio.onended = () => setZennaState('idle');
-          await audio.play();
+          try {
+            const audio = new Audio(data.audioUrl);
+            audio.onended = () => setZennaState('idle');
+            audio.onerror = (e) => {
+              console.error('Audio playback error:', e);
+              setZennaState('idle');
+            };
+            await audio.play();
+          } catch (err) {
+            console.error('Audio playback failed:', err);
+            setZennaState('idle');
+          }
         } else {
+          console.warn('No audio URL returned from chat API - check ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID env vars');
           setZennaState('idle');
         }
 
@@ -322,6 +425,9 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-screen flex flex-col">
+      {/* Knowledge Ingestion Progress Indicator */}
+      <KnowledgeIngestionIndicator />
+
       {/* Header */}
       <header className="h-16 border-b border-zenna-border flex items-center justify-between px-6">
         <div className="flex items-center gap-3">
@@ -362,7 +468,7 @@ export default function ChatPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel - Avatar */}
         <div className="w-1/3 min-w-[300px] max-w-[500px] border-r border-zenna-border flex flex-col items-center justify-center p-8">
-          <Avatar state={zennaState} avatarUrl={avatarUrl} emotion={currentEmotion} />
+          <Avatar state={zennaState} avatarUrl={avatarUrl} emotion={currentEmotion} newIntegration={newIntegration} />
 
           {/* Microphone Button */}
           <button
@@ -419,6 +525,46 @@ export default function ChatPage() {
       {/* Settings Panel */}
       {isSettingsOpen && (
         <SettingsPanel onClose={() => setIsSettingsOpen(false)} />
+      )}
+
+      {/* Integration Education Prompt */}
+      {showEducationPrompt && pendingEducationIntegration && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-zenna-surface border border-zenna-border rounded-2xl p-6 max-w-md w-full shadow-2xl animate-in fade-in zoom-in duration-300">
+            {/* Integration Icon */}
+            <div className="text-center mb-4">
+              <span className="text-5xl">
+                {INTEGRATION_MANIFESTS[pendingEducationIntegration]?.icon || '🔗'}
+              </span>
+            </div>
+
+            {/* Title */}
+            <h2 className="text-xl font-medium text-center mb-2">
+              {INTEGRATION_MANIFESTS[pendingEducationIntegration]?.name} Connected!
+            </h2>
+
+            {/* Question */}
+            <p className="text-zenna-muted text-center mb-6">
+              Would you like me to educate you on what I can do with this new integration?
+            </p>
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => handleEducationResponse(false)}
+                className="flex-1 px-4 py-3 border border-zenna-border rounded-xl hover:bg-zenna-border/50 transition-colors"
+              >
+                Maybe Later
+              </button>
+              <button
+                onClick={() => handleEducationResponse(true)}
+                className="flex-1 px-4 py-3 bg-zenna-accent hover:bg-indigo-600 rounded-xl transition-colors font-medium"
+              >
+                Yes, Show Me!
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );

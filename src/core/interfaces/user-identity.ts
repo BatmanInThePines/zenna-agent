@@ -53,7 +53,16 @@ export interface UserSettings {
 
   // External context connections
   externalContext?: {
-    notion?: { enabled: boolean; token?: string };
+    notion?: {
+      enabled: boolean;
+      token?: string;
+      workspaceId?: string;
+      workspaceName?: string;
+      botId?: string;
+      connectedAt?: number;
+      ingestionStatus?: 'idle' | 'processing' | 'completed' | 'error';
+      ingestionProgress?: number;
+    };
     notebooklm?: { enabled: boolean };
   };
 

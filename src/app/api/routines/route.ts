@@ -1,0 +1,96 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
+import { RoutineStore } from '@/core/providers/routines/routine-store';
+import { ScheduledRoutine } from '@/core/interfaces/integration-manifest';
+
+const identityStore = new SupabaseIdentityStore({
+  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  jwtSecret: process.env.AUTH_SECRET!,
+});
+
+const routineStore = new RoutineStore({
+  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+});
+
+/**
+ * GET /api/routines - List all routines for the current user
+ */
+export async function GET() {
+  try {
+    const cookieStore = await cookies();
+    const token = cookieStore.get('zenna-session')?.value;
+
+    if (!token) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const payload = await identityStore.verifyToken(token);
+    if (!payload) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const routines = await routineStore.getRoutinesForUser(payload.userId);
+
+    return NextResponse.json({ routines });
+  } catch (error) {
+    console.error('Get routines error:', error);
+    return NextResponse.json({ error: 'Failed to get routines' }, { status: 500 });
+  }
+}
+
+/**
+ * POST /api/routines - Create a new routine
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const cookieStore = await cookies();
+    const token = cookieStore.get('zenna-session')?.value;
+
+    if (!token) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const payload = await identityStore.verifyToken(token);
+    if (!payload) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { integrationId, actionId, name, description, schedule, parameters } = body;
+
+    // Validate required fields
+    if (!integrationId || !actionId || !name || !schedule) {
+      return NextResponse.json(
+        { error: 'Missing required fields: integrationId, actionId, name, schedule' },
+        { status: 400 }
+      );
+    }
+
+    // Validate schedule
+    if (!schedule.type || !schedule.time) {
+      return NextResponse.json(
+        { error: 'Schedule must include type and time' },
+        { status: 400 }
+      );
+    }
+
+    const routine = await routineStore.createRoutine({
+      userId: payload.userId,
+      integrationId,
+      actionId,
+      name,
+      description,
+      schedule,
+      parameters: parameters || {},
+      enabled: true,
+    });
+
+    return NextResponse.json({ routine }, { status: 201 });
+  } catch (error) {
+    console.error('Create routine error:', error);
+    return NextResponse.json({ error: 'Failed to create routine' }, { status: 500 });
+  }
+}

@@ -19,6 +19,22 @@ interface UserSettings {
       username?: string;
     };
   };
+  externalContext?: {
+    notion?: {
+      enabled: boolean;
+      token?: string;
+      workspaceId?: string;
+      workspaceName?: string;
+      ingestionStatus?: 'idle' | 'processing' | 'completed' | 'error';
+      ingestionProgress?: number;
+    };
+  };
+}
+
+interface NotionPage {
+  id: string;
+  title: string;
+  type: string;
 }
 
 interface MasterSettings {
@@ -86,6 +102,13 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   // Hue bridge state
   const [hueStatus, setHueStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
 
+  // Notion state
+  const [notionStatus, setNotionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const [notionPages, setNotionPages] = useState<NotionPage[]>([]);
+  const [selectedNotionPages, setSelectedNotionPages] = useState<Set<string>>(new Set());
+  const [isLoadingNotionPages, setIsLoadingNotionPages] = useState(false);
+  const [isIngesting, setIsIngesting] = useState(false);
+
   // Avatar upload refs
   const masterAvatarInputRef = useRef<HTMLInputElement>(null);
   const personalAvatarInputRef = useRef<HTMLInputElement>(null);
@@ -110,6 +133,13 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
         // Check if Hue is connected
         if (settingsData.settings?.integrations?.hue?.accessToken) {
           setHueStatus('connected');
+        }
+
+        // Check if Notion is connected
+        if (settingsData.settings?.externalContext?.notion?.token) {
+          setNotionStatus('connected');
+          // Load available pages
+          loadNotionPages();
         }
       } catch {
         setMessage({ type: 'error', text: 'Failed to load settings' });
@@ -249,6 +279,112 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
       // Ignore errors on status check
     }
   }, []);
+
+  // Load Notion pages
+  const loadNotionPages = useCallback(async () => {
+    setIsLoadingNotionPages(true);
+    try {
+      const response = await fetch('/api/integrations/notion/connect', {
+        method: 'POST',
+      });
+      const data = await response.json();
+
+      if (data.connected && data.pages) {
+        setNotionPages(data.pages);
+        setNotionStatus('connected');
+      }
+    } catch {
+      // Ignore errors
+    } finally {
+      setIsLoadingNotionPages(false);
+    }
+  }, []);
+
+  // Connect to Notion
+  const connectNotion = useCallback(async () => {
+    setNotionStatus('connecting');
+
+    try {
+      const response = await fetch('/api/integrations/notion/connect', {
+        method: 'GET',
+      });
+
+      const data = await response.json();
+
+      if (data.authUrl) {
+        window.location.href = data.authUrl;
+      } else if (data.error) {
+        setNotionStatus('disconnected');
+        setMessage({ type: 'error', text: data.error });
+      }
+    } catch {
+      setNotionStatus('disconnected');
+      setMessage({ type: 'error', text: 'Failed to initiate Notion connection' });
+    }
+  }, []);
+
+  // Disconnect from Notion
+  const disconnectNotion = useCallback(async () => {
+    try {
+      await saveSettings({
+        externalContext: {
+          ...settings.externalContext,
+          notion: undefined,
+        },
+      });
+      setNotionStatus('disconnected');
+      setNotionPages([]);
+      setSelectedNotionPages(new Set());
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to disconnect Notion' });
+    }
+  }, [saveSettings, settings.externalContext]);
+
+  // Toggle page selection
+  const togglePageSelection = useCallback((pageId: string) => {
+    setSelectedNotionPages(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(pageId)) {
+        newSet.delete(pageId);
+      } else {
+        newSet.add(pageId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  // Start ingestion
+  const startIngestion = useCallback(async () => {
+    if (selectedNotionPages.size === 0) {
+      setMessage({ type: 'error', text: 'Please select at least one page to ingest' });
+      return;
+    }
+
+    setIsIngesting(true);
+    try {
+      const response = await fetch('/api/integrations/notion/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pageIds: Array.from(selectedNotionPages),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.message) {
+        setMessage({ type: 'success', text: `Ingestion started: ${data.totalPages} pages being processed in background` });
+        // Close settings panel so user can see progress indicator
+        onClose();
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Failed to start ingestion' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to start ingestion' });
+    } finally {
+      setIsIngesting(false);
+    }
+  }, [selectedNotionPages, onClose]);
 
   const handleAvatarUpload = useCallback(async (file: File, target: 'master' | 'personal') => {
     if (!file) return;
@@ -645,6 +781,139 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                           </svg>
                           Connect with Hue Account
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Notion Knowledge Base */}
+              <div className="glass-card p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium flex items-center">
+                    Notion Knowledge Base
+                    <InfoTooltip
+                      title="Notion Integration"
+                      description="Connect your Notion workspace to give Zenna access to your notes and documents as a knowledge base."
+                      howTo="Click Connect, authorize access, then select which pages to ingest."
+                    />
+                  </h3>
+                  <span className={`text-xs px-2 py-1 rounded-full ${
+                    notionStatus === 'connected'
+                      ? 'bg-green-500/20 text-green-400'
+                      : 'bg-zenna-surface text-zenna-muted'
+                  }`}>
+                    {notionStatus === 'connected' ? 'Connected' : 'Not Connected'}
+                  </span>
+                </div>
+
+                {notionStatus === 'connected' ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2 text-sm text-zenna-muted">
+                      <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Connected to Notion
+                      {settings.externalContext?.notion?.workspaceName && (
+                        <span className="text-zenna-accent">({settings.externalContext.notion.workspaceName})</span>
+                      )}
+                    </div>
+
+                    {/* Page Selection */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs text-zenna-muted">Select pages to add to knowledge base:</p>
+                        {isLoadingNotionPages && <span className="spinner-sm" />}
+                      </div>
+
+                      {notionPages.length > 0 ? (
+                        <div className="max-h-48 overflow-y-auto space-y-1 border border-zenna-border rounded-lg p-2">
+                          {notionPages.map((page) => (
+                            <label
+                              key={page.id}
+                              className="flex items-center gap-2 p-2 hover:bg-zenna-surface rounded cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedNotionPages.has(page.id)}
+                                onChange={() => togglePageSelection(page.id)}
+                                className="w-4 h-4 rounded border-zenna-border bg-zenna-bg text-zenna-accent focus:ring-zenna-accent"
+                              />
+                              <span className="text-sm truncate">{page.title}</span>
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-zenna-muted italic">
+                          No pages found. Make sure you granted access to pages in Notion.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={startIngestion}
+                        disabled={isIngesting || selectedNotionPages.size === 0}
+                        className="btn-primary text-sm flex items-center gap-2"
+                      >
+                        {isIngesting ? (
+                          <>
+                            <span className="spinner-sm" />
+                            Starting...
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                            </svg>
+                            Ingest {selectedNotionPages.size > 0 ? `(${selectedNotionPages.size})` : ''}
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        onClick={loadNotionPages}
+                        disabled={isLoadingNotionPages}
+                        className="btn-secondary text-sm"
+                      >
+                        Refresh Pages
+                      </button>
+
+                      <button
+                        onClick={disconnectNotion}
+                        className="text-red-400 text-xs hover:underline ml-auto"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+
+                    <p className="text-xs text-zenna-muted">
+                      Ingestion runs in the background. A progress indicator will appear at the top of the screen.
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs text-zenna-muted mb-3">
+                      Connect your Notion workspace to give Zenna access to your notes and documents. Selected pages will be vectorized and stored for RAG retrieval.
+                    </p>
+                    <button
+                      onClick={connectNotion}
+                      disabled={notionStatus === 'connecting'}
+                      className="btn-secondary text-sm flex items-center gap-2"
+                    >
+                      {notionStatus === 'connecting' ? (
+                        <>
+                          <span className="spinner-sm" />
+                          Redirecting...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                          </svg>
+                          Connect Notion
                         </>
                       )}
                     </button>

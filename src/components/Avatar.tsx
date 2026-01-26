@@ -33,13 +33,15 @@ interface AvatarProps {
   avatarUrl?: string;
   emotion?: EmotionType;
   intensity?: number; // 0-1 for how intense the emotion display should be
+  newIntegration?: string | null; // Name of newly connected integration (triggers glow effect)
 }
 
 export default function Avatar({
   state,
   avatarUrl,
   emotion = 'neutral',
-  intensity = 0.7
+  intensity = 0.7,
+  newIntegration = null
 }: AvatarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -277,11 +279,19 @@ export default function Avatar({
         imageDimensions.height
       );
 
-      // Apply color overlay effect using composite operations
+      // Apply color overlay effect ONLY to non-transparent pixels
+      // Uses 'source-atop' composite to respect the alpha channel
       if (config.colorShift) {
-        ctx.globalCompositeOperation = 'soft-light';
+        // First, set composite mode so color only applies where there are existing pixels
+        ctx.globalCompositeOperation = 'source-atop';
         ctx.fillStyle = `${colors.primary}${Math.floor(0.15 * intensity * 255).toString(16).padStart(2, '0')}`;
         ctx.fillRect(imgX, imgY, imageDimensions.width, imageDimensions.height);
+
+        // Apply a second pass with soft-light for better color blending
+        ctx.globalCompositeOperation = 'soft-light';
+        ctx.fillStyle = `${colors.primary}${Math.floor(0.1 * intensity * 255).toString(16).padStart(2, '0')}`;
+        ctx.fillRect(imgX, imgY, imageDimensions.width, imageDimensions.height);
+
         ctx.globalCompositeOperation = 'source-over';
       }
 
@@ -383,6 +393,55 @@ export default function Avatar({
               animationDelay: '0.3s',
             }}
           />
+        </>
+      )}
+
+      {/* New Integration Celebration Glow Effect */}
+      {newIntegration && (
+        <>
+          {/* Outer golden glow ring - expanding */}
+          <div
+            className="absolute inset-[-20px] rounded-full pointer-events-none animate-pulse"
+            style={{
+              background: 'radial-gradient(circle, transparent 50%, rgba(255, 215, 0, 0.3) 70%, transparent 100%)',
+              animation: 'integrationGlow 2s ease-in-out infinite',
+            }}
+          />
+          {/* Inner celebration sparkle ring */}
+          <div
+            className="absolute inset-[-10px] rounded-full pointer-events-none"
+            style={{
+              background: 'conic-gradient(from 0deg, transparent, rgba(255, 215, 0, 0.5), transparent, rgba(16, 185, 129, 0.5), transparent)',
+              animation: 'integrationSpin 3s linear infinite',
+            }}
+          />
+          {/* Pulsing border highlight */}
+          <div
+            className="absolute inset-0 rounded-full pointer-events-none"
+            style={{
+              border: '3px solid rgba(255, 215, 0, 0.6)',
+              boxShadow: '0 0 30px rgba(255, 215, 0, 0.5), inset 0 0 20px rgba(255, 215, 0, 0.2)',
+              animation: 'integrationPulse 1.5s ease-in-out infinite',
+            }}
+          />
+          {/* Floating sparkles */}
+          {[...Array(6)].map((_, i) => (
+            <div
+              key={i}
+              className="absolute pointer-events-none"
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: i % 2 === 0 ? '#FFD700' : '#10B981',
+                boxShadow: `0 0 10px ${i % 2 === 0 ? '#FFD700' : '#10B981'}`,
+                left: '50%',
+                top: '50%',
+                transform: `rotate(${i * 60}deg) translateY(-170px)`,
+                animation: `integrationSparkle 2s ease-in-out infinite ${i * 0.3}s`,
+              }}
+            />
+          ))}
         </>
       )}
     </div>
