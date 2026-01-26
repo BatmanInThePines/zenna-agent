@@ -30,7 +30,8 @@ export default function ChatPage() {
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const websocketRef = useRef<WebSocket | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
 
   // Check authentication
   useEffect(() => {
@@ -98,69 +99,6 @@ export default function ChatPage() {
     }
   }, []);
 
-  // Handle microphone button click
-  const handleMicClick = useCallback(async () => {
-    if (zennaState === 'listening') {
-      // Stop listening
-      mediaRecorderRef.current?.stop();
-      websocketRef.current?.close();
-      setZennaState('idle');
-      return;
-    }
-
-    try {
-      // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // Initialize audio context if needed
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContext();
-      }
-
-      setZennaState('listening');
-      setCurrentTranscript('');
-
-      // Connect to ASR websocket
-      const ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/zenna/listen`);
-      websocketRef.current = ws;
-
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-
-        if (data.type === 'transcript') {
-          setCurrentTranscript(data.transcript);
-
-          if (data.isFinal) {
-            // Process the final transcript
-            handleUserMessage(data.transcript);
-          }
-        }
-      };
-
-      ws.onclose = () => {
-        stream.getTracks().forEach(track => track.stop());
-        setZennaState(current => current === 'listening' ? 'idle' : current);
-      };
-
-      // Set up media recorder
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-          ws.send(event.data);
-        }
-      };
-
-      mediaRecorder.start(100); // Send audio chunks every 100ms
-
-    } catch (error) {
-      console.error('Microphone access denied:', error);
-      setZennaState('error');
-      setTimeout(() => setZennaState('idle'), 3000);
-    }
-  }, [zennaState]);
-
   // Handle user message (from voice or text)
   const handleUserMessage = useCallback(async (text: string) => {
     if (!text.trim()) return;
@@ -216,6 +154,88 @@ export default function ChatPage() {
       setTimeout(() => setZennaState('idle'), 3000);
     }
   }, []);
+
+  // Handle microphone button click - record and transcribe
+  const handleMicClick = useCallback(async () => {
+    if (zennaState === 'listening') {
+      // Stop listening and process recording
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      return;
+    }
+
+    try {
+      // Request microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // Initialize audio context if needed
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext();
+      }
+
+      setZennaState('listening');
+      setCurrentTranscript('Recording...');
+      audioChunksRef.current = [];
+
+      // Set up media recorder
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+
+        setCurrentTranscript('Transcribing...');
+        setZennaState('thinking');
+
+        // Combine audio chunks into a single blob
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+
+        try {
+          // Send to transcription API
+          const formData = new FormData();
+          formData.append('audio', audioBlob, 'recording.webm');
+
+          const response = await fetch('/api/zenna/transcribe', {
+            method: 'POST',
+            body: formData,
+          });
+
+          const data = await response.json();
+
+          if (data.transcript && data.transcript.trim()) {
+            setCurrentTranscript(data.transcript);
+            // Process the transcript as a message
+            handleUserMessage(data.transcript);
+          } else {
+            setCurrentTranscript('');
+            setZennaState('idle');
+          }
+        } catch (error) {
+          console.error('Transcription error:', error);
+          setCurrentTranscript('');
+          setZennaState('error');
+          setTimeout(() => setZennaState('idle'), 3000);
+        }
+      };
+
+      // Start recording
+      mediaRecorder.start(100);
+
+    } catch (error) {
+      console.error('Microphone access denied:', error);
+      setZennaState('error');
+      setTimeout(() => setZennaState('idle'), 3000);
+    }
+  }, [zennaState, handleUserMessage]);
 
   // Handle text input submission
   const handleTextSubmit = useCallback((text: string) => {
