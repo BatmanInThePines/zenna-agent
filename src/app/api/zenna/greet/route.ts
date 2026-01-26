@@ -52,6 +52,7 @@ export async function POST() {
     return NextResponse.json({
       greeting,
       audioUrl,
+      emotion: 'helpful', // Default greeting emotion
     });
   } catch (error) {
     console.error('Greet error:', error);

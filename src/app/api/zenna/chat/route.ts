@@ -121,14 +121,190 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Analyze response tone/emotion for avatar color
+    const emotion = analyzeEmotion(response.content);
+
     return NextResponse.json({
       response: response.content,
       audioUrl,
+      emotion,
     });
   } catch (error) {
     console.error('Chat error:', error);
     return NextResponse.json({ error: 'Failed to process message' }, { status: 500 });
   }
+}
+
+// Emotion types that match Avatar component
+type EmotionType =
+  | 'joy' | 'trust' | 'fear' | 'surprise' | 'sadness' | 'anticipation' | 'anger' | 'disgust'
+  | 'neutral' | 'curious' | 'helpful' | 'empathetic' | 'thoughtful' | 'encouraging' | 'calming' | 'focused';
+
+// Analyze text content to determine emotional tone
+// Based on sentiment analysis and keyword matching
+function analyzeEmotion(text: string): EmotionType {
+  const lowerText = text.toLowerCase();
+
+  // Keyword patterns for each emotion (weighted by specificity)
+  const emotionPatterns: { emotion: EmotionType; patterns: RegExp[]; weight: number }[] = [
+    // Primary emotions
+    {
+      emotion: 'joy',
+      patterns: [
+        /\b(happy|glad|delighted|excited|wonderful|fantastic|amazing|great news|congratulations|celebrate|joy|yay|awesome|excellent)\b/i,
+        /!\s*$/,
+        /😊|😄|🎉|✨/
+      ],
+      weight: 1.2
+    },
+    {
+      emotion: 'sadness',
+      patterns: [
+        /\b(sorry|sad|unfortunate|regret|apologize|condolences|loss|miss|difficult time|tough|hard to hear)\b/i,
+        /😢|😔|💔/
+      ],
+      weight: 1.1
+    },
+    {
+      emotion: 'fear',
+      patterns: [
+        /\b(warning|danger|careful|caution|risk|threat|worry|concern|alarming|urgent)\b/i,
+        /⚠️|🚨/
+      ],
+      weight: 1.0
+    },
+    {
+      emotion: 'surprise',
+      patterns: [
+        /\b(wow|surprising|unexpected|incredible|unbelievable|astonishing|amazingly|remarkably)\b/i,
+        /\?!/,
+        /😮|😲|🤯/
+      ],
+      weight: 1.0
+    },
+    {
+      emotion: 'anger',
+      patterns: [
+        /\b(frustrated|annoying|unacceptable|outrageous|terrible|awful|horrible)\b/i,
+        /😠|😤/
+      ],
+      weight: 0.9
+    },
+    {
+      emotion: 'anticipation',
+      patterns: [
+        /\b(looking forward|can't wait|upcoming|soon|excited about|eager|planning)\b/i,
+        /🔮|⏳/
+      ],
+      weight: 1.0
+    },
+    {
+      emotion: 'trust',
+      patterns: [
+        /\b(trust|reliable|confident|secure|safe|dependable|honest|integrity)\b/i,
+        /🤝|✅/
+      ],
+      weight: 0.9
+    },
+    {
+      emotion: 'disgust',
+      patterns: [
+        /\b(disgusting|gross|revolting|unpleasant|distasteful)\b/i,
+        /🤢|😷/
+      ],
+      weight: 0.8
+    },
+
+    // Conversational/assistant emotions
+    {
+      emotion: 'helpful',
+      patterns: [
+        /\b(here's how|let me help|i can assist|steps to|guide you|help you|show you how|explain)\b/i,
+        /\b(here are|here is|to do this|you can)\b/i,
+        /\d+\.\s+/  // Numbered lists indicate helpfulness
+      ],
+      weight: 1.3
+    },
+    {
+      emotion: 'curious',
+      patterns: [
+        /\b(interesting|fascinating|intriguing|wonder|curious|explore|discover|learn more)\b/i,
+        /\?$/,
+        /🤔|💭/
+      ],
+      weight: 1.1
+    },
+    {
+      emotion: 'empathetic',
+      patterns: [
+        /\b(understand|feel|hear you|acknowledge|appreciate|that must be|sounds like|i see)\b/i,
+        /\b(going through|experience|feeling)\b/i,
+        /💙|🫂/
+      ],
+      weight: 1.2
+    },
+    {
+      emotion: 'thoughtful',
+      patterns: [
+        /\b(consider|reflect|think about|perspective|nuanced|complex|depends|however|although|on the other hand)\b/i,
+        /\b(actually|in fact|interestingly)\b/i
+      ],
+      weight: 1.0
+    },
+    {
+      emotion: 'encouraging',
+      patterns: [
+        /\b(you can do|believe in|great job|well done|keep going|proud|progress|improvement|success)\b/i,
+        /\b(definitely|absolutely|certainly|of course)\b/i,
+        /💪|🌟|👏/
+      ],
+      weight: 1.2
+    },
+    {
+      emotion: 'calming',
+      patterns: [
+        /\b(relax|calm|peace|gentle|soft|easy|no rush|take your time|no worries|don't worry)\b/i,
+        /\b(breathe|settle|quiet|serene)\b/i,
+        /🧘|☮️|🌿/
+      ],
+      weight: 1.1
+    },
+    {
+      emotion: 'focused',
+      patterns: [
+        /\b(specifically|precisely|exactly|detail|focus|important|key point|critical|essential)\b/i,
+        /\b(note that|remember|pay attention)\b/i,
+        /🎯|📌/
+      ],
+      weight: 1.0
+    },
+  ];
+
+  // Score each emotion
+  const scores: { emotion: EmotionType; score: number }[] = emotionPatterns.map(({ emotion, patterns, weight }) => {
+    let score = 0;
+    for (const pattern of patterns) {
+      const matches = lowerText.match(pattern);
+      if (matches) {
+        score += matches.length * weight;
+      }
+    }
+    return { emotion, score };
+  });
+
+  // Sort by score and get the highest
+  scores.sort((a, b) => b.score - a.score);
+
+  // If no strong signal, return helpful (default assistant tone) or neutral
+  if (scores[0].score < 0.5) {
+    // Check if it looks like an informative response
+    if (lowerText.length > 100 || /\b(here|this|that|you|your)\b/i.test(lowerText)) {
+      return 'helpful';
+    }
+    return 'neutral';
+  }
+
+  return scores[0].emotion;
 }
 
 function buildSystemPrompt(

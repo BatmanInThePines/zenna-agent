@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import Avatar from '@/components/Avatar';
+import Avatar, { type EmotionType } from '@/components/Avatar';
 import Transcript from '@/components/Transcript';
 import ArtifactCanvas from '@/components/ArtifactCanvas';
 import ChatInput from '@/components/ChatInput';
@@ -28,6 +28,7 @@ export default function ChatPage() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [artifacts, setArtifacts] = useState<Array<{ type: string; content: unknown }>>([]);
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
+  const [currentEmotion, setCurrentEmotion] = useState<EmotionType>('neutral');
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -90,6 +91,11 @@ export default function ChatPage() {
       if (data.greeting) {
         setZennaState('speaking');
 
+        // Set greeting emotion
+        if (data.emotion) {
+          setCurrentEmotion(data.emotion as EmotionType);
+        }
+
         // Add greeting to messages
         setMessages([{
           id: crypto.randomUUID(),
@@ -130,6 +136,7 @@ export default function ChatPage() {
     setMessages(prev => [...prev, userMessage]);
     setCurrentTranscript('');
     setZennaState('thinking');
+    setCurrentEmotion('thoughtful'); // Processing when thinking
 
     try {
       const response = await fetch('/api/zenna/chat', {
@@ -150,6 +157,11 @@ export default function ChatPage() {
 
         setMessages(prev => [...prev, assistantMessage]);
         setZennaState('speaking');
+
+        // Update emotion based on response analysis
+        if (data.emotion) {
+          setCurrentEmotion(data.emotion as EmotionType);
+        }
 
         // Play audio response
         if (data.audioUrl) {
@@ -193,6 +205,7 @@ export default function ChatPage() {
       }
 
       setZennaState('listening');
+      setCurrentEmotion('curious'); // Attentive when listening
       setCurrentTranscript('Recording...');
       audioChunksRef.current = [];
 
@@ -349,7 +362,7 @@ export default function ChatPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel - Avatar */}
         <div className="w-1/3 min-w-[300px] max-w-[500px] border-r border-zenna-border flex flex-col items-center justify-center p-8">
-          <Avatar state={zennaState} avatarUrl={avatarUrl} />
+          <Avatar state={zennaState} avatarUrl={avatarUrl} emotion={currentEmotion} />
 
           {/* Microphone Button */}
           <button
