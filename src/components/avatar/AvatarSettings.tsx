@@ -305,13 +305,17 @@ export default function AvatarSettings({
 
         if (!uploadResponse.ok) {
           const errorText = await uploadResponse.text();
-          let errorMsg = `Failed to upload image ${i + 1}.`;
+          let errorMsg = `Failed to upload image ${i + 1} (HTTP ${uploadResponse.status}).`;
           try {
             const errorData = JSON.parse(errorText);
             errorMsg = errorData.error || errorMsg;
           } catch {
-            if (uploadResponse.status === 504 || uploadResponse.status === 408) {
-              errorMsg = `Image ${i + 1} upload timed out. Try a smaller image or check your Vercel plan (Pro required for large uploads).`;
+            if (uploadResponse.status === 413) {
+              errorMsg = `Image ${i + 1} is too large for the server (${(img.file.size / 1024 / 1024).toFixed(1)}MB). Try compressing or resizing the image.`;
+            } else if (uploadResponse.status === 504 || uploadResponse.status === 408) {
+              errorMsg = `Image ${i + 1} upload timed out (${(img.file.size / 1024 / 1024).toFixed(1)}MB). Try a smaller image.`;
+            } else {
+              errorMsg = `Failed to upload image ${i + 1}: HTTP ${uploadResponse.status} - ${errorText.slice(0, 200)}`;
             }
           }
           setMessage({ type: 'error', text: errorMsg });
@@ -348,10 +352,11 @@ export default function AvatarSettings({
       }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[AvatarSettings] Reconstruction error:', error);
       if (errMsg.includes('Failed to fetch') || errMsg.includes('NetworkError') || errMsg.includes('timeout')) {
-        setMessage({ type: 'error', text: 'Upload timed out or network error. Your images may be too large, or Vercel Pro plan may be needed for larger uploads.' });
+        setMessage({ type: 'error', text: 'Network error or timeout during upload. Check browser console for details.' });
       } else {
-        setMessage({ type: 'error', text: `Failed to start reconstruction: ${errMsg}` });
+        setMessage({ type: 'error', text: `Reconstruction failed: ${errMsg}` });
       }
     } finally {
       setIsStartingReconstruction(false);
