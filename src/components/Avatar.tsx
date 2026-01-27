@@ -47,7 +47,6 @@ export default function Avatar({
 }: AvatarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const glowCanvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const animationRef = useRef<number>(0);
   const timeRef = useRef(0);
@@ -93,9 +92,6 @@ export default function Avatar({
           breathingAmount: 0.008,
           glowPulseSpeed: 0.3,
           glowIntensity: 0.3,
-          particleCount: 5,
-          particleSpeed: 0.3,
-          auraLayers: 2,
           colorShift: false,
         };
       case 'listening':
@@ -104,9 +100,6 @@ export default function Avatar({
           breathingAmount: 0.015,
           glowPulseSpeed: 2,
           glowIntensity: 0.7,
-          particleCount: 15,
-          particleSpeed: 0.8,
-          auraLayers: 4,
           colorShift: true,
         };
       case 'thinking':
@@ -115,9 +108,6 @@ export default function Avatar({
           breathingAmount: 0.005,
           glowPulseSpeed: 0.5,
           glowIntensity: 0.4,
-          particleCount: 8,
-          particleSpeed: 0.2,
-          auraLayers: 3,
           colorShift: false,
         };
       case 'speaking':
@@ -126,9 +116,6 @@ export default function Avatar({
           breathingAmount: 0.02,
           glowPulseSpeed: 4,
           glowIntensity: 0.8,
-          particleCount: 20,
-          particleSpeed: 1.2,
-          auraLayers: 5,
           colorShift: true,
         };
       case 'error':
@@ -137,9 +124,6 @@ export default function Avatar({
           breathingAmount: 0.01,
           glowPulseSpeed: 8,
           glowIntensity: 0.9,
-          particleCount: 10,
-          particleSpeed: 2,
-          auraLayers: 3,
           colorShift: false,
         };
       default:
@@ -148,24 +132,10 @@ export default function Avatar({
           breathingAmount: 0.008,
           glowPulseSpeed: 0.3,
           glowIntensity: 0.3,
-          particleCount: 5,
-          particleSpeed: 0.3,
-          auraLayers: 2,
           colorShift: false,
         };
     }
   }, [state]);
-
-  // Particle system for ambient effects
-  const particlesRef = useRef<Array<{
-    x: number;
-    y: number;
-    vx: number;
-    vy: number;
-    size: number;
-    alpha: number;
-    life: number;
-  }>>([]);
 
   // Load and analyze image
   useEffect(() => {
@@ -176,7 +146,7 @@ export default function Avatar({
     img.onload = () => {
       imageRef.current = img;
       // Calculate dimensions to fit within canvas while preserving aspect ratio
-      const maxSize = canvasSize * 0.9; // Leave some padding for glow effects
+      const maxSize = canvasSize * 0.85; // Leave padding for glow effects
       const scale = Math.min(maxSize / img.width, maxSize / img.height);
       setImageDimensions({
         width: img.width * scale,
@@ -195,96 +165,32 @@ export default function Avatar({
     if (!imageLoaded) return;
 
     const canvas = canvasRef.current;
-    const glowCanvas = glowCanvasRef.current;
-    if (!canvas || !glowCanvas) return;
+    if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const glowCtx = glowCanvas.getContext('2d');
-    if (!ctx || !glowCtx) return;
-
-    // Initialize particles
-    const initParticles = () => {
-      particlesRef.current = [];
-      for (let i = 0; i < stateConfig.particleCount; i++) {
-        particlesRef.current.push({
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height,
-          vx: (Math.random() - 0.5) * 2,
-          vy: (Math.random() - 0.5) * 2,
-          size: Math.random() * 4 + 2,
-          alpha: Math.random() * 0.5 + 0.2,
-          life: Math.random(),
-        });
-      }
-    };
-
-    initParticles();
+    if (!ctx) return;
 
     const animate = () => {
-      if (!canvas || !ctx || !glowCanvas || !glowCtx || !imageRef.current) return;
+      if (!canvas || !ctx || !imageRef.current) return;
 
       timeRef.current += 0.016;
       const time = timeRef.current;
       const config = stateConfig;
 
-      // Clear canvases
+      // Clear canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      glowCtx.clearRect(0, 0, glowCanvas.width, glowCanvas.height);
 
       const centerX = canvas.width / 2;
       const centerY = canvas.height / 2;
 
       // Calculate breathing animation
       const breathe = 1 + Math.sin(time * config.breathingSpeed) * config.breathingAmount;
-      const glowPulse = config.glowIntensity * (0.7 + Math.sin(time * config.glowPulseSpeed) * 0.3);
 
-      // Draw aura layers on glow canvas
-      for (let i = config.auraLayers; i > 0; i--) {
-        const layerAlpha = (glowPulse * intensity) / (i * 1.5);
-        const layerSize = imageDimensions.width * 0.5 + (i * 20) + Math.sin(time * 0.5 + i) * 5;
+      // Calculate image position
+      const imgX = centerX - imageDimensions.width / 2;
+      const imgY = centerY - imageDimensions.height / 2;
 
-        const gradient = glowCtx.createRadialGradient(
-          centerX, centerY, 0,
-          centerX, centerY, layerSize
-        );
-
-        gradient.addColorStop(0, `${colors.primary}${Math.floor(layerAlpha * 255).toString(16).padStart(2, '0')}`);
-        gradient.addColorStop(0.5, `${colors.secondary}${Math.floor(layerAlpha * 0.5 * 255).toString(16).padStart(2, '0')}`);
-        gradient.addColorStop(1, 'transparent');
-
-        glowCtx.fillStyle = gradient;
-        glowCtx.fillRect(0, 0, glowCanvas.width, glowCanvas.height);
-      }
-
-      // Draw particles
-      particlesRef.current.forEach((particle) => {
-        // Update particle
-        particle.x += particle.vx * config.particleSpeed;
-        particle.y += particle.vy * config.particleSpeed;
-        particle.life -= 0.005;
-
-        // Respawn if dead or out of bounds
-        if (particle.life <= 0 || particle.x < 0 || particle.x > canvas.width ||
-            particle.y < 0 || particle.y > canvas.height) {
-          const angle = Math.random() * Math.PI * 2;
-          const distance = imageDimensions.width * 0.4 + Math.random() * 30;
-          particle.x = centerX + Math.cos(angle) * distance;
-          particle.y = centerY + Math.sin(angle) * distance;
-          particle.vx = (Math.random() - 0.5) * 2;
-          particle.vy = (Math.random() - 0.5) * 2;
-          particle.life = 1;
-          particle.alpha = Math.random() * 0.5 + 0.2;
-        }
-
-        // Draw particle
-        const particleAlpha = particle.alpha * particle.life * intensity;
-        glowCtx.beginPath();
-        glowCtx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-        glowCtx.fillStyle = `${colors.primary}${Math.floor(particleAlpha * 255).toString(16).padStart(2, '0')}`;
-        glowCtx.fill();
-      });
-
-      // Draw the avatar image with effects
+      // Draw the avatar image
       ctx.save();
 
       // Apply breathing scale
@@ -292,10 +198,7 @@ export default function Avatar({
       ctx.scale(breathe, breathe);
       ctx.translate(-centerX, -centerY);
 
-      // Draw image (no clipping - preserve transparency)
-      const imgX = centerX - imageDimensions.width / 2;
-      const imgY = centerY - imageDimensions.height / 2;
-
+      // Draw image (preserve transparency)
       ctx.drawImage(
         imageRef.current,
         imgX,
@@ -309,12 +212,12 @@ export default function Avatar({
       if (config.colorShift) {
         // First, set composite mode so color only applies where there are existing pixels
         ctx.globalCompositeOperation = 'source-atop';
-        ctx.fillStyle = `${colors.primary}${Math.floor(0.15 * intensity * 255).toString(16).padStart(2, '0')}`;
+        ctx.fillStyle = `${colors.primary}${Math.floor(0.12 * intensity * 255).toString(16).padStart(2, '0')}`;
         ctx.fillRect(imgX, imgY, imageDimensions.width, imageDimensions.height);
 
         // Apply a second pass with soft-light for better color blending
         ctx.globalCompositeOperation = 'soft-light';
-        ctx.fillStyle = `${colors.primary}${Math.floor(0.1 * intensity * 255).toString(16).padStart(2, '0')}`;
+        ctx.fillStyle = `${colors.primary}${Math.floor(0.08 * intensity * 255).toString(16).padStart(2, '0')}`;
         ctx.fillRect(imgX, imgY, imageDimensions.width, imageDimensions.height);
 
         ctx.globalCompositeOperation = 'source-over';
@@ -352,14 +255,23 @@ export default function Avatar({
     </div>
   );
 
-  // Calculate drop-shadow filter for silhouette glow
-  // drop-shadow respects PNG transparency unlike box-shadow
-  const glowIntensity = stateConfig.glowIntensity * intensity;
-  const dropShadowFilter = `
-    drop-shadow(0 0 ${10 * glowIntensity}px ${colors.primary})
-    drop-shadow(0 0 ${20 * glowIntensity}px ${colors.glow})
-    drop-shadow(0 0 ${30 * glowIntensity}px ${colors.secondary}40)
-  `;
+  // Calculate dynamic drop-shadow filter for silhouette glow
+  // drop-shadow respects PNG transparency - this is the KEY to proper glow
+  const glowPulse = stateConfig.glowIntensity * intensity;
+
+  // Build multiple drop-shadows for layered glow effect
+  const glowSize1 = Math.round(8 + glowPulse * 12);
+  const glowSize2 = Math.round(16 + glowPulse * 24);
+  const glowSize3 = Math.round(24 + glowPulse * 36);
+
+  const dropShadowFilter = [
+    `drop-shadow(0 0 ${glowSize1}px ${colors.primary})`,
+    `drop-shadow(0 0 ${glowSize2}px ${colors.glow})`,
+    `drop-shadow(0 0 ${glowSize3}px ${colors.secondary}60)`,
+  ].join(' ');
+
+  // Error state adds hue rotation
+  const errorFilter = state === 'error' ? 'hue-rotate(-40deg) ' : '';
 
   return (
     <div
@@ -372,21 +284,7 @@ export default function Avatar({
         minHeight: fillContainer ? 0 : 320,
       }}
     >
-      {/* Glow/Aura layer (behind) - uses blur for soft glow */}
-      <canvas
-        ref={glowCanvasRef}
-        width={canvasSize}
-        height={canvasSize}
-        className="absolute pointer-events-none"
-        style={{
-          width: canvasSize,
-          height: canvasSize,
-          filter: 'blur(8px)',
-          opacity: intensity,
-        }}
-      />
-
-      {/* Main avatar canvas with drop-shadow for silhouette glow */}
+      {/* Main avatar canvas - drop-shadow filter creates silhouette-respecting glow */}
       <canvas
         ref={canvasRef}
         width={canvasSize}
@@ -395,10 +293,9 @@ export default function Avatar({
         style={{
           width: canvasSize,
           height: canvasSize,
-          // Use drop-shadow instead of box-shadow to respect PNG transparency
-          filter: state === 'error'
-            ? `hue-rotate(-40deg) ${dropShadowFilter}`
-            : dropShadowFilter,
+          // drop-shadow respects the alpha channel of the canvas content
+          // This creates a glow that follows the avatar silhouette, not the rectangular bounds
+          filter: `${errorFilter}${dropShadowFilter}`,
         }}
       />
 
@@ -412,7 +309,7 @@ export default function Avatar({
         </div>
       )}
 
-      {/* State indicator - subtle bottom glow bar using drop-shadow */}
+      {/* State indicator - subtle bottom glow bar */}
       <div
         className="absolute left-1/2 -translate-x-1/2 h-1 rounded-full transition-all duration-500"
         style={{
@@ -420,19 +317,18 @@ export default function Avatar({
           width: state === 'idle' ? '30%' : state === 'listening' ? '60%' : state === 'speaking' ? '80%' : '40%',
           background: `linear-gradient(90deg, transparent, ${colors.primary}, transparent)`,
           opacity: state === 'idle' ? 0.3 : 0.8,
-          // Use drop-shadow instead of box-shadow
           filter: `drop-shadow(0 0 10px ${colors.primary}) drop-shadow(0 0 20px ${colors.glow})`,
         }}
       />
 
-      {/* Ripple effect for speaking/listening - follows silhouette concept */}
+      {/* Ripple effect for speaking/listening */}
       {(state === 'speaking' || state === 'listening') && (
         <>
           <div
             className="absolute pointer-events-none animate-ping"
             style={{
-              width: canvasSize,
-              height: canvasSize,
+              width: canvasSize * 0.8,
+              height: canvasSize * 0.8,
               borderRadius: '50%',
               border: `2px solid ${colors.primary}30`,
               animationDuration: state === 'speaking' ? '1s' : '1.5s',
@@ -441,8 +337,8 @@ export default function Avatar({
           <div
             className="absolute pointer-events-none animate-ping"
             style={{
-              width: canvasSize * 0.9,
-              height: canvasSize * 0.9,
+              width: canvasSize * 0.7,
+              height: canvasSize * 0.7,
               borderRadius: '50%',
               border: `1px solid ${colors.secondary}20`,
               animationDuration: state === 'speaking' ? '1.2s' : '1.8s',
@@ -452,17 +348,17 @@ export default function Avatar({
         </>
       )}
 
-      {/* New Integration Celebration Glow Effect - uses drop-shadow for transparency */}
+      {/* New Integration Celebration Glow Effect */}
       {newIntegration && (
         <>
           {/* Outer golden glow ring - expanding */}
           <div
-            className="absolute pointer-events-none animate-pulse"
+            className="absolute pointer-events-none"
             style={{
-              width: canvasSize + 40,
-              height: canvasSize + 40,
+              width: canvasSize * 0.9,
+              height: canvasSize * 0.9,
               borderRadius: '50%',
-              background: 'radial-gradient(circle, transparent 50%, rgba(255, 215, 0, 0.3) 70%, transparent 100%)',
+              background: 'radial-gradient(circle, transparent 60%, rgba(255, 215, 0, 0.2) 80%, transparent 100%)',
               animation: 'integrationGlow 2s ease-in-out infinite',
             }}
           />
@@ -470,23 +366,22 @@ export default function Avatar({
           <div
             className="absolute pointer-events-none"
             style={{
-              width: canvasSize + 20,
-              height: canvasSize + 20,
+              width: canvasSize * 0.85,
+              height: canvasSize * 0.85,
               borderRadius: '50%',
-              background: 'conic-gradient(from 0deg, transparent, rgba(255, 215, 0, 0.5), transparent, rgba(16, 185, 129, 0.5), transparent)',
+              background: 'conic-gradient(from 0deg, transparent, rgba(255, 215, 0, 0.4), transparent, rgba(16, 185, 129, 0.4), transparent)',
               animation: 'integrationSpin 3s linear infinite',
             }}
           />
-          {/* Pulsing border highlight - using drop-shadow for clean edges */}
+          {/* Pulsing border highlight */}
           <div
             className="absolute pointer-events-none"
             style={{
-              width: canvasSize,
-              height: canvasSize,
+              width: canvasSize * 0.8,
+              height: canvasSize * 0.8,
               borderRadius: '50%',
-              border: '3px solid rgba(255, 215, 0, 0.6)',
-              // Use drop-shadow instead of box-shadow for cleaner effect
-              filter: 'drop-shadow(0 0 15px rgba(255, 215, 0, 0.5)) drop-shadow(0 0 30px rgba(255, 215, 0, 0.3))',
+              border: '2px solid rgba(255, 215, 0, 0.5)',
+              filter: 'drop-shadow(0 0 10px rgba(255, 215, 0, 0.4)) drop-shadow(0 0 20px rgba(255, 215, 0, 0.2))',
               animation: 'integrationPulse 1.5s ease-in-out infinite',
             }}
           />
@@ -496,15 +391,14 @@ export default function Avatar({
               key={i}
               className="absolute pointer-events-none"
               style={{
-                width: 8,
-                height: 8,
+                width: 6,
+                height: 6,
                 borderRadius: '50%',
                 background: i % 2 === 0 ? '#FFD700' : '#10B981',
-                // Use drop-shadow for sparkle glow
-                filter: `drop-shadow(0 0 5px ${i % 2 === 0 ? '#FFD700' : '#10B981'})`,
+                filter: `drop-shadow(0 0 4px ${i % 2 === 0 ? '#FFD700' : '#10B981'})`,
                 left: '50%',
                 top: '50%',
-                transform: `rotate(${i * 60}deg) translateY(-${canvasSize * 0.55}px)`,
+                transform: `rotate(${i * 60}deg) translateY(-${canvasSize * 0.45}px)`,
                 animation: `integrationSparkle 2s ease-in-out infinite ${i * 0.3}s`,
               }}
             />
