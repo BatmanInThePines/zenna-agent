@@ -303,9 +303,24 @@ export default function AvatarSettings({
           body: formData,
         });
 
+        if (!uploadResponse.ok) {
+          const errorText = await uploadResponse.text();
+          let errorMsg = `Failed to upload image ${i + 1}.`;
+          try {
+            const errorData = JSON.parse(errorText);
+            errorMsg = errorData.error || errorMsg;
+          } catch {
+            if (uploadResponse.status === 504 || uploadResponse.status === 408) {
+              errorMsg = `Image ${i + 1} upload timed out. Try a smaller image or check your Vercel plan (Pro required for large uploads).`;
+            }
+          }
+          setMessage({ type: 'error', text: errorMsg });
+          return;
+        }
+
         const uploadData = await uploadResponse.json();
 
-        if (!uploadResponse.ok || !uploadData.success) {
+        if (!uploadData.success) {
           setMessage({ type: 'error', text: uploadData.error || `Failed to upload image ${i + 1}.` });
           return;
         }
@@ -332,7 +347,12 @@ export default function AvatarSettings({
         setMessage({ type: 'error', text: data.error || 'Failed to start reconstruction.' });
       }
     } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to start reconstruction. Please try again.' });
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      if (errMsg.includes('Failed to fetch') || errMsg.includes('NetworkError') || errMsg.includes('timeout')) {
+        setMessage({ type: 'error', text: 'Upload timed out or network error. Your images may be too large, or Vercel Pro plan may be needed for larger uploads.' });
+      } else {
+        setMessage({ type: 'error', text: `Failed to start reconstruction: ${errMsg}` });
+      }
     } finally {
       setIsStartingReconstruction(false);
     }

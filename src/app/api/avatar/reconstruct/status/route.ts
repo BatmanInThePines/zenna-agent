@@ -11,6 +11,9 @@ import * as jose from 'jose';
 import { getJobForUser } from '@/lib/avatar/supabase-reconstruction-store';
 import { checkAndProcessPrediction } from '@/lib/avatar/replicate-reconstruction';
 
+// Allow up to 60s on Vercel Pro (polling fallback may need to download + process GLB)
+export const maxDuration = 60;
+
 // =============================================================================
 // HELPERS
 // =============================================================================

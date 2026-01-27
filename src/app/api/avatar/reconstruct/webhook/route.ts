@@ -11,6 +11,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { processReplicateWebhook } from '@/lib/avatar/replicate-reconstruction';
 import { getJob } from '@/lib/avatar/supabase-reconstruction-store';
 
+// Allow up to 60s on Vercel Pro (webhook needs time to download + re-upload GLB)
+export const maxDuration = 60;
+
 // =============================================================================
 // TYPES
 // =============================================================================

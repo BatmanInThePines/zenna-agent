@@ -17,6 +17,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import * as jose from 'jose';
+
+// Allow up to 60s on Vercel Pro (default is 10s on Hobby)
+export const maxDuration = 60;
 import {
   createJob,
   getJobsForUser,

@@ -11,6 +11,9 @@ import { cookies } from 'next/headers';
 import * as jose from 'jose';
 import { uploadImage } from '@/lib/avatar/supabase-reconstruction-store';
 
+// Allow up to 60s on Vercel Pro (default is 10s on Hobby)
+export const maxDuration = 60;
+
 // =============================================================================
 // HELPERS
 // =============================================================================
