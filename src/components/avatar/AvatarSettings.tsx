@@ -25,6 +25,93 @@ import {
 } from './types';
 
 // =============================================================================
+// IMAGE COMPRESSION
+// =============================================================================
+
+const MAX_UPLOAD_SIZE = 4 * 1024 * 1024; // 4MB - under Vercel's 4.5MB body limit
+
+/**
+ * Compress an image file client-side using Canvas.
+ * Preserves transparency by using PNG output but scales down if needed.
+ * Falls back to JPEG (lossy) if PNG is still too large.
+ */
+async function compressImageForUpload(file: File): Promise<File> {
+  if (file.size <= MAX_UPLOAD_SIZE) return file;
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+
+      // Scale down to reduce file size while maintaining aspect ratio
+      let { width, height } = img;
+      const maxDimension = 1536; // Good balance: still high-res but much smaller file
+
+      if (width > maxDimension || height > maxDimension) {
+        const scale = maxDimension / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject(new Error('Could not create canvas context')); return; }
+
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // Try PNG first (preserves transparency)
+      canvas.toBlob(
+        (pngBlob) => {
+          if (pngBlob && pngBlob.size <= MAX_UPLOAD_SIZE) {
+            resolve(new File([pngBlob], file.name, { type: 'image/png' }));
+            return;
+          }
+
+          // PNG still too large - try WebP with quality reduction (preserves transparency)
+          canvas.toBlob(
+            (webpBlob) => {
+              if (webpBlob && webpBlob.size <= MAX_UPLOAD_SIZE) {
+                const name = file.name.replace(/\.\w+$/, '.webp');
+                resolve(new File([webpBlob], name, { type: 'image/webp' }));
+                return;
+              }
+
+              // Last resort: JPEG at 85% quality (loses transparency but guaranteed small)
+              canvas.toBlob(
+                (jpegBlob) => {
+                  if (jpegBlob) {
+                    const name = file.name.replace(/\.\w+$/, '.jpg');
+                    resolve(new File([jpegBlob], name, { type: 'image/jpeg' }));
+                  } else {
+                    reject(new Error('Failed to compress image'));
+                  }
+                },
+                'image/jpeg',
+                0.85
+              );
+            },
+            'image/webp',
+            0.9
+          );
+        },
+        'image/png'
+      );
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Failed to load image for compression'));
+    };
+
+    img.src = url;
+  });
+}
+
+// =============================================================================
 // TYPES
 // =============================================================================
 
@@ -292,10 +379,18 @@ export default function AvatarSettings({
 
       for (let i = 0; i < uploadedImages.length; i++) {
         const img = uploadedImages[i];
-        setMessage({ type: 'info', text: `Uploading image ${i + 1} of ${uploadedImages.length}...` });
+
+        // Compress large images client-side to stay under Vercel's 4.5MB body limit
+        let fileToUpload = img.file;
+        if (fileToUpload.size > MAX_UPLOAD_SIZE) {
+          setMessage({ type: 'info', text: `Compressing image ${i + 1} (${(fileToUpload.size / 1024 / 1024).toFixed(1)}MB)...` });
+          fileToUpload = await compressImageForUpload(fileToUpload);
+        }
+
+        setMessage({ type: 'info', text: `Uploading image ${i + 1} of ${uploadedImages.length} (${(fileToUpload.size / 1024 / 1024).toFixed(1)}MB)...` });
 
         const formData = new FormData();
-        formData.append('image', img.file);
+        formData.append('image', fileToUpload);
         formData.append('angle', img.angle);
 
         const uploadResponse = await fetch('/api/avatar/upload', {
