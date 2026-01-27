@@ -2,6 +2,47 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react';
 
+// Helper function to remove black/dark background from an image
+// This makes the avatar silhouette work properly with drop-shadow glow effects
+function removeBlackBackground(img: HTMLImageElement, threshold: number = 30): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+
+  if (!ctx) return canvas;
+
+  // Draw the original image
+  ctx.drawImage(img, 0, 0);
+
+  // Get image data
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+
+  // Process each pixel - make black/near-black pixels transparent
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    // If the pixel is dark (black or near-black), make it transparent
+    // Using luminance-based calculation for better edge detection
+    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+
+    if (luminance < threshold) {
+      // Calculate how transparent this pixel should be based on how dark it is
+      // Darker pixels become more transparent
+      const alpha = Math.max(0, (luminance / threshold) * 255);
+      data[i + 3] = Math.floor(alpha);
+    }
+  }
+
+  // Put the modified image data back
+  ctx.putImageData(imageData, 0, 0);
+
+  return canvas;
+}
+
 // Emotion color system based on psychological research (Plutchik's wheel + studies)
 // Maps emotional states to colors that resonate with human perception
 const EMOTION_COLORS = {
@@ -137,14 +178,22 @@ export default function Avatar({
     }
   }, [state]);
 
-  // Load image - preserves original PNG transparency
+  // Reference to processed canvas (with background removed)
+  const processedCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Load image and remove black background for proper transparency
   useEffect(() => {
     const img = new window.Image();
     img.crossOrigin = 'anonymous';
     img.src = currentAvatarUrl;
 
     img.onload = () => {
-      // Store reference to original image (preserves PNG transparency)
+      // Process the image to remove black background
+      // This ensures drop-shadow glow follows the avatar silhouette, not the bounding box
+      const processedCanvas = removeBlackBackground(img, 35); // threshold of 35 for smooth edges
+      processedCanvasRef.current = processedCanvas;
+
+      // Store reference to original image (for dimensions)
       imageRef.current = img;
 
       // Calculate dimensions to fit within canvas while preserving aspect ratio
@@ -164,7 +213,7 @@ export default function Avatar({
 
   // Main animation loop
   useEffect(() => {
-    if (!imageLoaded || !imageRef.current) return;
+    if (!imageLoaded || !processedCanvasRef.current) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -173,7 +222,7 @@ export default function Avatar({
     if (!ctx) return;
 
     const animate = () => {
-      if (!canvas || !ctx || !imageRef.current) return;
+      if (!canvas || !ctx || !processedCanvasRef.current) return;
 
       timeRef.current += 0.016;
       const time = timeRef.current;
@@ -192,7 +241,7 @@ export default function Avatar({
       const imgX = centerX - imageDimensions.width / 2;
       const imgY = centerY - imageDimensions.height / 2;
 
-      // Draw the original avatar image - PNG transparency is preserved automatically
+      // Draw the processed avatar image (with black background removed)
       ctx.save();
 
       // Apply breathing scale
@@ -200,9 +249,9 @@ export default function Avatar({
       ctx.scale(breathe, breathe);
       ctx.translate(-centerX, -centerY);
 
-      // Draw original image - canvas 2D context preserves PNG alpha channel
+      // Draw processed image - black background has been removed for proper glow effect
       ctx.drawImage(
-        imageRef.current,
+        processedCanvasRef.current,
         imgX,
         imgY,
         imageDimensions.width,
