@@ -185,8 +185,9 @@ export async function POST(request: NextRequest) {
         uploadedUrls.push(url);
       } catch (error) {
         console.error('Upload failed:', error);
+        const errMsg = error instanceof Error ? error.message : 'Unknown upload error';
         return NextResponse.json(
-          { error: 'Failed to upload image' },
+          { error: `Failed to upload image: ${errMsg}` },
           { status: 500 }
         );
       }
@@ -220,14 +221,10 @@ export async function POST(request: NextRequest) {
       }
     } catch (error) {
       console.error('Failed to start Replicate reconstruction:', error);
-      await updateJobStatus(
-        job.id,
-        'failed',
-        0,
-        error instanceof Error ? error.message : 'Failed to start reconstruction'
-      );
+      const errMsg = error instanceof Error ? error.message : 'Failed to start reconstruction';
+      await updateJobStatus(job.id, 'failed', 0, errMsg);
       return NextResponse.json(
-        { error: 'Failed to start 3D reconstruction' },
+        { error: `Failed to start 3D reconstruction: ${errMsg}` },
         { status: 500 }
       );
     }
