@@ -19,7 +19,7 @@ import { getJobForUser } from '@/lib/avatar/supabase-reconstruction-store';
  */
 async function getCurrentUser(): Promise<{ id: string; username: string } | null> {
   const cookieStore = await cookies();
-  const token = cookieStore.get('zenna_session')?.value;
+  const token = cookieStore.get('zenna-session')?.value;
 
   if (!token) return null;
 
