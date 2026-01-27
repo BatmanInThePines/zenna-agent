@@ -138,58 +138,67 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Parse form data
-    const formData = await request.formData();
-    const imageCount = parseInt(formData.get('imageCount') as string) || 0;
+    // Support two modes:
+    // 1. JSON body with pre-uploaded imageUrls (avoids Vercel 4.5MB body limit)
+    // 2. FormData with image files (for single small images)
+    let uploadedUrls: string[] = [];
+    const contentType = request.headers.get('content-type') || '';
 
-    if (imageCount === 0) {
-      return NextResponse.json({ error: 'No images provided' }, { status: 400 });
-    }
+    if (contentType.includes('application/json')) {
+      // Mode 1: Pre-uploaded image URLs
+      const body = await request.json();
+      uploadedUrls = body.imageUrls || [];
 
-    // Process and upload each image
-    const uploadedUrls: string[] = [];
-    const tempJobId = `temp-${Date.now()}`; // Temporary ID for organizing uploads
+      if (uploadedUrls.length === 0) {
+        return NextResponse.json({ error: 'No image URLs provided' }, { status: 400 });
+      }
+    } else {
+      // Mode 2: FormData with image files (single image, backward compatible)
+      const formData = await request.formData();
+      const imageCount = parseInt(formData.get('imageCount') as string) || 0;
 
-    for (let i = 0; i < imageCount; i++) {
-      const image = formData.get(`image_${i}`) as File | null;
-      const angle = (formData.get(`angle_${i}`) as string) || 'unknown';
-
-      if (!image) continue;
-
-      // Read file buffer
-      const buffer = Buffer.from(await image.arrayBuffer());
-
-      // Validate image
-      const validation = validateImage(buffer, image.name);
-      if (!validation.valid) {
-        return NextResponse.json(
-          {
-            error: `Image ${i + 1} validation failed: ${validation.errors.join(', ')}`,
-          },
-          { status: 400 }
-        );
+      if (imageCount === 0) {
+        return NextResponse.json({ error: 'No images provided' }, { status: 400 });
       }
 
-      // Generate unique filename
-      const ext = image.name.split('.').pop() || 'png';
-      const filename = `${angle}_${i}_${Date.now()}.${ext}`;
+      const tempJobId = `temp-${Date.now()}`;
 
-      // Upload to Supabase Storage
-      try {
-        const url = await uploadImage(
-          buffer,
-          filename,
-          tempJobId,
-          validation.contentType
-        );
-        uploadedUrls.push(url);
-      } catch (error) {
-        console.error('Upload failed:', error);
-        const errMsg = error instanceof Error ? error.message : 'Unknown upload error';
-        return NextResponse.json(
-          { error: `Failed to upload image: ${errMsg}` },
-          { status: 500 }
-        );
+      for (let i = 0; i < imageCount; i++) {
+        const image = formData.get(`image_${i}`) as File | null;
+        const angle = (formData.get(`angle_${i}`) as string) || 'unknown';
+
+        if (!image) continue;
+
+        const buffer = Buffer.from(await image.arrayBuffer());
+        const validation = validateImage(buffer, image.name);
+        if (!validation.valid) {
+          return NextResponse.json(
+            {
+              error: `Image ${i + 1} validation failed: ${validation.errors.join(', ')}`,
+            },
+            { status: 400 }
+          );
+        }
+
+        const ext = image.name.split('.').pop() || 'png';
+        const filename = `${angle}_${i}_${Date.now()}.${ext}`;
+
+        try {
+          const url = await uploadImage(
+            buffer,
+            filename,
+            tempJobId,
+            validation.contentType
+          );
+          uploadedUrls.push(url);
+        } catch (error) {
+          console.error('Upload failed:', error);
+          const errMsg = error instanceof Error ? error.message : 'Unknown upload error';
+          return NextResponse.json(
+            { error: `Failed to upload image: ${errMsg}` },
+            { status: 500 }
+          );
+        }
       }
     }
 

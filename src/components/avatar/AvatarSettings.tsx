@@ -286,20 +286,40 @@ export default function AvatarSettings({
     setMessage(null);
 
     try {
-      const formData = new FormData();
+      // Upload images individually to avoid Vercel's 4.5MB body size limit
+      setMessage({ type: 'info', text: `Uploading ${uploadedImages.length} image(s)...` });
+      const imageUrls: string[] = [];
 
-      // Add images
-      uploadedImages.forEach((img, index) => {
-        formData.append(`image_${index}`, img.file);
-        formData.append(`angle_${index}`, img.angle);
-      });
+      for (let i = 0; i < uploadedImages.length; i++) {
+        const img = uploadedImages[i];
+        setMessage({ type: 'info', text: `Uploading image ${i + 1} of ${uploadedImages.length}...` });
 
-      formData.append('imageCount', uploadedImages.length.toString());
-      formData.append('method', uploadedImages.length === 1 ? 'single-image' : 'photogrammetry');
+        const formData = new FormData();
+        formData.append('image', img.file);
+        formData.append('angle', img.angle);
+
+        const uploadResponse = await fetch('/api/avatar/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const uploadData = await uploadResponse.json();
+
+        if (!uploadResponse.ok || !uploadData.success) {
+          setMessage({ type: 'error', text: uploadData.error || `Failed to upload image ${i + 1}.` });
+          return;
+        }
+
+        imageUrls.push(uploadData.url);
+      }
+
+      // Start reconstruction with pre-uploaded image URLs
+      setMessage({ type: 'info', text: 'Starting 3D reconstruction...' });
 
       const response = await fetch('/api/avatar/reconstruct', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageUrls }),
       });
 
       const data = await response.json();
