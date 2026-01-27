@@ -127,6 +127,39 @@ export default function Avatar3D({
     eyeTargetTimer: 0,
     currentViseme: 'silence',
     visemeTransition: 0,
+    // Max Headroom motion state
+    mh: {
+      // Jerky head movement
+      headTarget: { x: 0, y: 0, z: 0 },
+      headCurrent: { x: 0, y: 0, z: 0 },
+      headMoveTimer: 0,
+      nextHeadMove: 0.3,
+      // Position jitter
+      posTarget: { x: 0, y: 0 },
+      posCurrent: { x: 0, y: 0 },
+      posMoveTimer: 0,
+      nextPosMove: 0.5,
+      // Glitch freeze
+      glitchActive: false,
+      glitchTimer: 0,
+      nextGlitch: 3,
+      glitchDuration: 0,
+      // Energy burst
+      burstActive: false,
+      burstTimer: 0,
+      burstDuration: 0,
+      nextBurst: 5,
+      // Stutter/loop (head bob rapid repeat)
+      stutterActive: false,
+      stutterTimer: 0,
+      stutterCount: 0,
+      stutterMax: 0,
+      // Scale pulse
+      scalePulse: 0,
+      // Conversation energy (0-1, drives intensity)
+      energy: 0.3,
+      targetEnergy: 0.3,
+    },
   });
 
   // Get emotion colors and animation config
@@ -523,8 +556,205 @@ export default function Avatar3D({
     if (!modelRef.current) return;
 
     const breathe = 1 + Math.sin(time * animConfig.breathingSpeed) * animConfig.breathingAmount;
-    modelRef.current.scale.setScalar(breathe * 1.5); // Base scale * breathing
+    const mh = animStateRef.current.mh;
+    const scalePulse = 1 + mh.scalePulse * 0.05;
+    modelRef.current.scale.setScalar(breathe * 1.5 * scalePulse); // Base scale * breathing * pulse
   }, [animConfig]);
+
+  // =============================================================================
+  // MAX HEADROOM MOTION ENGINE
+  // =============================================================================
+  //
+  // Emulates the iconic Max Headroom style:
+  // - Jerky, snap-to-pose head rotations
+  // - Positional jitter (digital interference)
+  // - Glitch freezes (buffering pauses)
+  // - Energy bursts (rapid-fire movement when excited)
+  // - Stutter loops (rapid head bobs on repeat)
+  // - Intensity scales with conversation energy
+  // =============================================================================
+
+  const updateMaxHeadroomMotion = useCallback((deltaTime: number) => {
+    if (!modelRef.current) return;
+
+    const mh = animStateRef.current.mh;
+    const time = animStateRef.current.time;
+
+    // --- Energy scaling based on state ---
+    // Speaking = high energy, thinking = low, idle = medium-low
+    const stateEnergy: Record<string, number> = {
+      idle: 0.2,
+      listening: 0.35,
+      thinking: 0.15,
+      speaking: 0.7,
+      error: 0.9,
+    };
+    mh.targetEnergy = stateEnergy[state] || 0.3;
+
+    // Emotion modulates energy
+    const emotionBoost: Record<string, number> = {
+      joy: 0.15, surprise: 0.25, anger: 0.2, fear: 0.15,
+      encouraging: 0.1, curious: 0.1, focused: -0.1, calming: -0.15,
+      thoughtful: -0.1, neutral: 0, helpful: 0.05, empathetic: 0,
+      trust: 0, anticipation: 0.1, sadness: -0.1, disgust: 0.05,
+    };
+    mh.targetEnergy += (emotionBoost[emotion] || 0);
+    mh.targetEnergy = Math.max(0.05, Math.min(1, mh.targetEnergy));
+
+    // Smooth energy transition
+    mh.energy += (mh.targetEnergy - mh.energy) * deltaTime * 2;
+
+    const energy = mh.energy;
+
+    // --- Glitch Freeze ---
+    mh.glitchTimer += deltaTime;
+    if (!mh.glitchActive && mh.glitchTimer >= mh.nextGlitch) {
+      // Trigger a freeze glitch (more frequent at higher energy)
+      mh.glitchActive = true;
+      mh.glitchTimer = 0;
+      mh.glitchDuration = 0.05 + Math.random() * 0.15; // 50-200ms freeze
+      mh.nextGlitch = (2 + Math.random() * 6) * (1.5 - energy); // More frequent when energetic
+    }
+    if (mh.glitchActive) {
+      mh.glitchTimer += deltaTime;
+      if (mh.glitchTimer >= mh.glitchDuration) {
+        mh.glitchActive = false;
+        mh.glitchTimer = 0;
+      }
+      // During glitch: don't update position/rotation (freeze in place)
+      return;
+    }
+
+    // --- Energy Burst ---
+    mh.burstTimer += deltaTime;
+    if (!mh.burstActive && mh.burstTimer >= mh.nextBurst && energy > 0.4) {
+      mh.burstActive = true;
+      mh.burstTimer = 0;
+      mh.burstDuration = 0.3 + Math.random() * 0.5;
+      mh.nextBurst = (3 + Math.random() * 5) * (1.5 - energy);
+    }
+    if (mh.burstActive) {
+      mh.burstTimer += deltaTime;
+      if (mh.burstTimer >= mh.burstDuration) {
+        mh.burstActive = false;
+        mh.burstTimer = 0;
+        mh.scalePulse = 0;
+      }
+    }
+
+    const burstMultiplier = mh.burstActive ? 2.5 : 1;
+
+    // --- Stutter/Loop (rapid head bobs) ---
+    if (!mh.stutterActive && state === 'speaking' && Math.random() < 0.003 * energy) {
+      mh.stutterActive = true;
+      mh.stutterTimer = 0;
+      mh.stutterCount = 0;
+      mh.stutterMax = 2 + Math.floor(Math.random() * 4); // 2-5 rapid bobs
+    }
+    if (mh.stutterActive) {
+      mh.stutterTimer += deltaTime;
+      if (mh.stutterTimer > 0.08) { // 80ms per bob
+        mh.stutterTimer = 0;
+        mh.stutterCount++;
+        // Alternate head position for stutter effect
+        mh.headTarget.x = (mh.stutterCount % 2 === 0 ? 0.05 : -0.05) * energy;
+        mh.headTarget.y = (mh.stutterCount % 2 === 0 ? 0.03 : -0.03) * energy;
+        if (mh.stutterCount >= mh.stutterMax) {
+          mh.stutterActive = false;
+        }
+      }
+    }
+
+    // --- Jerky Head Rotation ---
+    mh.headMoveTimer += deltaTime;
+    const headMoveInterval = mh.stutterActive ? 0.08 :
+      (0.15 + Math.random() * 0.4) / (burstMultiplier * (0.5 + energy));
+
+    if (mh.headMoveTimer >= mh.nextHeadMove && !mh.stutterActive) {
+      // Snap to new rotation target (Max Headroom overshoots then corrects)
+      const range = 0.12 * energy * burstMultiplier;
+      mh.headTarget = {
+        x: (Math.random() - 0.5) * range,        // Tilt left/right
+        y: (Math.random() - 0.5) * range * 0.7,   // Nod up/down
+        z: (Math.random() - 0.5) * range * 0.3,   // Roll
+      };
+      mh.headMoveTimer = 0;
+      mh.nextHeadMove = headMoveInterval;
+
+      // Occasional dramatic head turn
+      if (Math.random() < 0.08 * energy) {
+        mh.headTarget.x *= 3;
+        mh.headTarget.y *= 2;
+      }
+    }
+
+    // Snap interpolation (jerky, not smooth - key to Max Headroom feel)
+    // High lerp = snappy, low = smooth. Max is snappy.
+    const headLerp = 0.3 + energy * 0.4; // 0.3-0.7 range
+    mh.headCurrent.x += (mh.headTarget.x - mh.headCurrent.x) * headLerp;
+    mh.headCurrent.y += (mh.headTarget.y - mh.headCurrent.y) * headLerp;
+    mh.headCurrent.z += (mh.headTarget.z - mh.headCurrent.z) * headLerp;
+
+    // --- Positional Jitter (digital interference) ---
+    mh.posMoveTimer += deltaTime;
+    const posMoveInterval = (0.2 + Math.random() * 0.5) / (burstMultiplier * (0.5 + energy));
+
+    if (mh.posMoveTimer >= mh.nextPosMove) {
+      const posRange = 0.03 * energy * burstMultiplier;
+      mh.posTarget = {
+        x: (Math.random() - 0.5) * posRange,
+        y: (Math.random() - 0.5) * posRange * 0.5,
+      };
+      mh.posMoveTimer = 0;
+      mh.nextPosMove = posMoveInterval;
+    }
+
+    const posLerp = 0.35 + energy * 0.3;
+    mh.posCurrent.x += (mh.posTarget.x - mh.posCurrent.x) * posLerp;
+    mh.posCurrent.y += (mh.posTarget.y - mh.posCurrent.y) * posLerp;
+
+    // --- Scale Pulse during bursts ---
+    if (mh.burstActive) {
+      mh.scalePulse = Math.sin(time * 15) * 0.3 * energy;
+    } else {
+      mh.scalePulse *= 0.9; // Decay
+    }
+
+    // --- Apply transforms to model ---
+    const model = modelRef.current;
+
+    // Base position (centered) + jitter
+    model.rotation.x = mh.headCurrent.y; // Nod
+    model.rotation.y = mh.headCurrent.x; // Turn
+    model.rotation.z = mh.headCurrent.z; // Roll
+
+    // Position jitter (add to existing centered position)
+    // Store base position on first call
+    if (!(model.userData as { baseY?: number }).baseY) {
+      (model.userData as { baseY: number }).baseY = model.position.y;
+      (model.userData as { baseX: number }).baseX = model.position.x;
+    }
+    const baseX = (model.userData as { baseX: number }).baseX || 0;
+    const baseY = (model.userData as { baseY: number }).baseY || 0;
+    model.position.x = baseX + mh.posCurrent.x;
+    model.position.y = baseY + mh.posCurrent.y;
+
+    // --- Exaggerated facial expressions during bursts ---
+    if (mh.burstActive && blendshapeMeshRef.current) {
+      const burstFace: BlendshapeWeights = {};
+      // Wide eyes + raised brows during energy bursts (Max's iconic look)
+      burstFace.eyeWideLeft = 0.3 * energy;
+      burstFace.eyeWideRight = 0.3 * energy;
+      burstFace.browOuterUpLeft = 0.4 * energy;
+      burstFace.browOuterUpRight = 0.4 * energy;
+      // Occasional smirk (Max's smug grin)
+      if (Math.sin(time * 12) > 0.5) {
+        burstFace.mouthSmileLeft = 0.3 * energy;
+        burstFace.mouthSmileRight = 0.2 * energy; // Asymmetric smirk
+      }
+      updateBlendshapes(burstFace);
+    }
+  }, [state, emotion, updateBlendshapes]);
 
   // =============================================================================
   // ANIMATION LOOP
@@ -550,6 +780,9 @@ export default function Avatar3D({
         updateEmotionExpression();
       }
 
+      // Max Headroom motion (jerky movements, glitches, energy bursts)
+      updateMaxHeadroomMotion(deltaTime);
+
       // Breathing animation
       updateBreathing(animStateRef.current.time);
 
@@ -566,7 +799,7 @@ export default function Avatar3D({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [modelLoaded, updateBlink, updateEyeMovement, updateLipSync, updateEmotionExpression, updateBreathing]);
+  }, [modelLoaded, updateBlink, updateEyeMovement, updateLipSync, updateEmotionExpression, updateBreathing, updateMaxHeadroomMotion]);
 
   // =============================================================================
   // RESIZE HANDLER
@@ -723,6 +956,10 @@ export default function Avatar3D({
           <div>Intensity: {intensity.toFixed(2)}</div>
           <div>Model: {modelLoaded ? 'Loaded' : 'Loading...'}</div>
           <div>Blendshapes: {blendshapeMeshRef.current ? 'Yes' : 'No'}</div>
+          <div>Energy: {animStateRef.current.mh.energy.toFixed(2)}</div>
+          <div>Glitch: {animStateRef.current.mh.glitchActive ? 'FREEZE' : 'off'}</div>
+          <div>Burst: {animStateRef.current.mh.burstActive ? 'ACTIVE' : 'off'}</div>
+          <div>Stutter: {animStateRef.current.mh.stutterActive ? `${animStateRef.current.mh.stutterCount}/${animStateRef.current.mh.stutterMax}` : 'off'}</div>
         </div>
       )}
     </div>
