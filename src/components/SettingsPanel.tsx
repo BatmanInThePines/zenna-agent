@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 interface SettingsPanelProps {
   onClose: () => void;
+  initialTab?: 'general' | 'llm' | 'integrations' | 'master';
 }
 
 interface UserSettings {
@@ -83,8 +84,8 @@ function InfoTooltip({ title, description, howTo }: InfoTooltipProps) {
   );
 }
 
-export default function SettingsPanel({ onClose }: SettingsPanelProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+export default function SettingsPanel({ onClose, initialTab }: SettingsPanelProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'general');
   const [settings, setSettings] = useState<UserSettings>({});
   const [masterSettings, setMasterSettings] = useState<MasterSettings>({});
   const [isFather, setIsFather] = useState(false);

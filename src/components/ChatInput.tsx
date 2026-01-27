@@ -28,7 +28,7 @@ export default function ChatInput({ onSubmit, disabled, placeholder }: ChatInput
   }, [handleSubmit]);
 
   return (
-    <div className="border-t border-zenna-border p-4">
+    <div className="border-b border-zenna-border p-4 bg-zenna-bg/95 backdrop-blur-sm">
       <form onSubmit={handleSubmit} className="flex items-center gap-3">
         <input
           ref={inputRef}

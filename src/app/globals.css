@@ -68,13 +68,13 @@ html {
   color: white;
 }
 
-/* Avatar glow animation */
+/* Avatar glow animation - uses drop-shadow to respect PNG transparency */
 @keyframes avatar-glow {
   0%, 100% {
-    box-shadow: 0 0 20px var(--zenna-glow);
+    filter: drop-shadow(0 0 20px var(--zenna-glow));
   }
   50% {
-    box-shadow: 0 0 40px var(--zenna-glow), 0 0 60px var(--zenna-glow);
+    filter: drop-shadow(0 0 40px var(--zenna-glow)) drop-shadow(0 0 60px var(--zenna-glow));
   }
 }
 
@@ -88,7 +88,7 @@ html {
 
 .avatar-thinking {
   animation: avatar-glow 2s ease-in-out infinite;
-  filter: brightness(0.8);
+  filter: brightness(0.8) drop-shadow(0 0 30px var(--zenna-glow));
 }
 
 /* Breathing animation for avatar */
@@ -248,15 +248,15 @@ button {
   }
 }
 
-/* Pulsing border */
+/* Pulsing border - uses drop-shadow for transparency-respecting glow */
 @keyframes integrationPulse {
   0%, 100% {
     border-color: rgba(255, 215, 0, 0.6);
-    box-shadow: 0 0 30px rgba(255, 215, 0, 0.5), inset 0 0 20px rgba(255, 215, 0, 0.2);
+    filter: drop-shadow(0 0 15px rgba(255, 215, 0, 0.5)) drop-shadow(0 0 30px rgba(255, 215, 0, 0.3));
   }
   50% {
     border-color: rgba(16, 185, 129, 0.6);
-    box-shadow: 0 0 40px rgba(16, 185, 129, 0.6), inset 0 0 30px rgba(16, 185, 129, 0.3);
+    filter: drop-shadow(0 0 20px rgba(16, 185, 129, 0.6)) drop-shadow(0 0 40px rgba(16, 185, 129, 0.4));
   }
 }
 

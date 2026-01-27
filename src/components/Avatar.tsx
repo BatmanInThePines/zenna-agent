@@ -34,6 +34,7 @@ interface AvatarProps {
   emotion?: EmotionType;
   intensity?: number; // 0-1 for how intense the emotion display should be
   newIntegration?: string | null; // Name of newly connected integration (triggers glow effect)
+  fillContainer?: boolean; // If true, avatar will expand to fill its container
 }
 
 export default function Avatar({
@@ -41,7 +42,8 @@ export default function Avatar({
   avatarUrl,
   emotion = 'neutral',
   intensity = 0.7,
-  newIntegration = null
+  newIntegration = null,
+  fillContainer = false
 }: AvatarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -51,6 +53,7 @@ export default function Avatar({
   const timeRef = useRef(0);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageDimensions, setImageDimensions] = useState({ width: 300, height: 300 });
+  const [containerSize, setContainerSize] = useState({ width: 320, height: 320 });
 
   // Default avatar if none provided
   const defaultAvatarUrl = '/avatar-default.png';
@@ -58,6 +61,28 @@ export default function Avatar({
 
   // Get current emotion colors
   const colors = useMemo(() => EMOTION_COLORS[emotion] || EMOTION_COLORS.neutral, [emotion]);
+
+  // Observe container size for fillContainer mode
+  useEffect(() => {
+    if (!fillContainer || !containerRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setContainerSize({ width, height });
+        }
+      }
+    });
+
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, [fillContainer]);
+
+  // Calculate canvas size based on mode
+  const canvasSize = fillContainer
+    ? Math.min(containerSize.width, containerSize.height)
+    : 320;
 
   // State-based animation parameters
   const stateConfig = useMemo(() => {
@@ -150,8 +175,8 @@ export default function Avatar({
 
     img.onload = () => {
       imageRef.current = img;
-      // Preserve aspect ratio
-      const maxSize = 300;
+      // Calculate dimensions to fit within canvas while preserving aspect ratio
+      const maxSize = canvasSize * 0.9; // Leave some padding for glow effects
       const scale = Math.min(maxSize / img.width, maxSize / img.height);
       setImageDimensions({
         width: img.width * scale,
@@ -163,7 +188,7 @@ export default function Avatar({
     img.onerror = () => {
       setImageLoaded(false);
     };
-  }, [currentAvatarUrl]);
+  }, [currentAvatarUrl, canvasSize]);
 
   // Main animation loop
   useEffect(() => {
@@ -232,7 +257,7 @@ export default function Avatar({
       }
 
       // Draw particles
-      particlesRef.current.forEach((particle, index) => {
+      particlesRef.current.forEach((particle) => {
         // Update particle
         particle.x += particle.vx * config.particleSpeed;
         particle.y += particle.vy * config.particleSpeed;
@@ -308,7 +333,7 @@ export default function Avatar({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [imageLoaded, state, emotion, intensity, colors, stateConfig, imageDimensions]);
+  }, [imageLoaded, state, emotion, intensity, colors, stateConfig, imageDimensions, canvasSize]);
 
   // Draw placeholder if no image
   const drawPlaceholder = () => (
@@ -327,67 +352,98 @@ export default function Avatar({
     </div>
   );
 
+  // Calculate drop-shadow filter for silhouette glow
+  // drop-shadow respects PNG transparency unlike box-shadow
+  const glowIntensity = stateConfig.glowIntensity * intensity;
+  const dropShadowFilter = `
+    drop-shadow(0 0 ${10 * glowIntensity}px ${colors.primary})
+    drop-shadow(0 0 ${20 * glowIntensity}px ${colors.glow})
+    drop-shadow(0 0 ${30 * glowIntensity}px ${colors.secondary}40)
+  `;
+
   return (
     <div
       ref={containerRef}
-      className="relative flex items-center justify-center"
+      className={`relative flex items-center justify-center ${fillContainer ? 'w-full h-full' : ''}`}
       style={{
-        width: 320,
-        height: 320,
-        filter: state === 'error' ? 'hue-rotate(-40deg)' : undefined,
+        width: fillContainer ? '100%' : 320,
+        height: fillContainer ? '100%' : 320,
+        minWidth: fillContainer ? 0 : 320,
+        minHeight: fillContainer ? 0 : 320,
       }}
     >
-      {/* Glow/Aura layer (behind) */}
+      {/* Glow/Aura layer (behind) - uses blur for soft glow */}
       <canvas
         ref={glowCanvasRef}
-        width={320}
-        height={320}
-        className="absolute inset-0 pointer-events-none"
+        width={canvasSize}
+        height={canvasSize}
+        className="absolute pointer-events-none"
         style={{
+          width: canvasSize,
+          height: canvasSize,
           filter: 'blur(8px)',
           opacity: intensity,
         }}
       />
 
-      {/* Main avatar canvas */}
+      {/* Main avatar canvas with drop-shadow for silhouette glow */}
       <canvas
         ref={canvasRef}
-        width={320}
-        height={320}
+        width={canvasSize}
+        height={canvasSize}
         className="relative z-10"
+        style={{
+          width: canvasSize,
+          height: canvasSize,
+          // Use drop-shadow instead of box-shadow to respect PNG transparency
+          filter: state === 'error'
+            ? `hue-rotate(-40deg) ${dropShadowFilter}`
+            : dropShadowFilter,
+        }}
       />
 
       {/* Placeholder if not loaded */}
       {!imageLoaded && (
-        <div className="absolute inset-0 z-10">
+        <div
+          className="absolute z-10 flex items-center justify-center"
+          style={{ width: canvasSize, height: canvasSize }}
+        >
           {drawPlaceholder()}
         </div>
       )}
 
-      {/* State indicator - subtle bottom glow bar */}
+      {/* State indicator - subtle bottom glow bar using drop-shadow */}
       <div
-        className="absolute bottom-0 left-1/2 -translate-x-1/2 h-1 rounded-full transition-all duration-500"
+        className="absolute left-1/2 -translate-x-1/2 h-1 rounded-full transition-all duration-500"
         style={{
+          bottom: fillContainer ? '10%' : 0,
           width: state === 'idle' ? '30%' : state === 'listening' ? '60%' : state === 'speaking' ? '80%' : '40%',
           background: `linear-gradient(90deg, transparent, ${colors.primary}, transparent)`,
           opacity: state === 'idle' ? 0.3 : 0.8,
-          boxShadow: `0 0 20px ${colors.glow}`,
+          // Use drop-shadow instead of box-shadow
+          filter: `drop-shadow(0 0 10px ${colors.primary}) drop-shadow(0 0 20px ${colors.glow})`,
         }}
       />
 
-      {/* Ripple effect for speaking/listening */}
+      {/* Ripple effect for speaking/listening - follows silhouette concept */}
       {(state === 'speaking' || state === 'listening') && (
         <>
           <div
-            className="absolute inset-0 rounded-full pointer-events-none animate-ping"
+            className="absolute pointer-events-none animate-ping"
             style={{
+              width: canvasSize,
+              height: canvasSize,
+              borderRadius: '50%',
               border: `2px solid ${colors.primary}30`,
               animationDuration: state === 'speaking' ? '1s' : '1.5s',
             }}
           />
           <div
-            className="absolute inset-4 rounded-full pointer-events-none animate-ping"
+            className="absolute pointer-events-none animate-ping"
             style={{
+              width: canvasSize * 0.9,
+              height: canvasSize * 0.9,
+              borderRadius: '50%',
               border: `1px solid ${colors.secondary}20`,
               animationDuration: state === 'speaking' ? '1.2s' : '1.8s',
               animationDelay: '0.3s',
@@ -396,31 +452,41 @@ export default function Avatar({
         </>
       )}
 
-      {/* New Integration Celebration Glow Effect */}
+      {/* New Integration Celebration Glow Effect - uses drop-shadow for transparency */}
       {newIntegration && (
         <>
           {/* Outer golden glow ring - expanding */}
           <div
-            className="absolute inset-[-20px] rounded-full pointer-events-none animate-pulse"
+            className="absolute pointer-events-none animate-pulse"
             style={{
+              width: canvasSize + 40,
+              height: canvasSize + 40,
+              borderRadius: '50%',
               background: 'radial-gradient(circle, transparent 50%, rgba(255, 215, 0, 0.3) 70%, transparent 100%)',
               animation: 'integrationGlow 2s ease-in-out infinite',
             }}
           />
           {/* Inner celebration sparkle ring */}
           <div
-            className="absolute inset-[-10px] rounded-full pointer-events-none"
+            className="absolute pointer-events-none"
             style={{
+              width: canvasSize + 20,
+              height: canvasSize + 20,
+              borderRadius: '50%',
               background: 'conic-gradient(from 0deg, transparent, rgba(255, 215, 0, 0.5), transparent, rgba(16, 185, 129, 0.5), transparent)',
               animation: 'integrationSpin 3s linear infinite',
             }}
           />
-          {/* Pulsing border highlight */}
+          {/* Pulsing border highlight - using drop-shadow for clean edges */}
           <div
-            className="absolute inset-0 rounded-full pointer-events-none"
+            className="absolute pointer-events-none"
             style={{
+              width: canvasSize,
+              height: canvasSize,
+              borderRadius: '50%',
               border: '3px solid rgba(255, 215, 0, 0.6)',
-              boxShadow: '0 0 30px rgba(255, 215, 0, 0.5), inset 0 0 20px rgba(255, 215, 0, 0.2)',
+              // Use drop-shadow instead of box-shadow for cleaner effect
+              filter: 'drop-shadow(0 0 15px rgba(255, 215, 0, 0.5)) drop-shadow(0 0 30px rgba(255, 215, 0, 0.3))',
               animation: 'integrationPulse 1.5s ease-in-out infinite',
             }}
           />
@@ -434,10 +500,11 @@ export default function Avatar({
                 height: 8,
                 borderRadius: '50%',
                 background: i % 2 === 0 ? '#FFD700' : '#10B981',
-                boxShadow: `0 0 10px ${i % 2 === 0 ? '#FFD700' : '#10B981'}`,
+                // Use drop-shadow for sparkle glow
+                filter: `drop-shadow(0 0 5px ${i % 2 === 0 ? '#FFD700' : '#10B981'})`,
                 left: '50%',
                 top: '50%',
-                transform: `rotate(${i * 60}deg) translateY(-170px)`,
+                transform: `rotate(${i * 60}deg) translateY(-${canvasSize * 0.55}px)`,
                 animation: `integrationSparkle 2s ease-in-out infinite ${i * 0.3}s`,
               }}
             />

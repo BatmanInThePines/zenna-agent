@@ -83,22 +83,11 @@ function ChatPageContent() {
     checkAuth();
   }, [router]);
 
-  // Check for new integration connections from URL params
-  useEffect(() => {
-    const hueConnected = searchParams.get('hue_connected');
-    const notionConnected = searchParams.get('notion_connected');
-
-    if (hueConnected === 'true') {
-      handleNewIntegration('hue');
-      // Clean URL without reloading
-      window.history.replaceState({}, '', '/chat');
-    } else if (notionConnected === 'true') {
-      handleNewIntegration('notion');
-      window.history.replaceState({}, '', '/chat');
-    }
-  }, [searchParams]);
+  // State to control which settings tab to open
+  const [initialSettingsTab, setInitialSettingsTab] = useState<string | null>(null);
 
   // Handle new integration connection - trigger glow and education prompt
+  // (Defined before useEffect that uses it)
   const handleNewIntegration = useCallback((integrationId: string) => {
     const manifest = INTEGRATION_MANIFESTS[integrationId];
     if (!manifest) return;
@@ -118,6 +107,32 @@ function ChatPageContent() {
       setNewIntegration(null);
     }, 10000);
   }, []);
+
+  // Check for new integration connections from URL params
+  useEffect(() => {
+    const hueConnected = searchParams.get('hue_connected');
+    const notionConnected = searchParams.get('notion_connected');
+    const openSettings = searchParams.get('open_settings');
+
+    if (hueConnected === 'true') {
+      handleNewIntegration('hue');
+      // Open settings to integrations tab if requested
+      if (openSettings === 'integrations') {
+        setInitialSettingsTab('integrations');
+        setIsSettingsOpen(true);
+      }
+      // Clean URL without reloading
+      window.history.replaceState({}, '', '/chat');
+    } else if (notionConnected === 'true') {
+      handleNewIntegration('notion');
+      // Open settings to integrations tab if requested
+      if (openSettings === 'integrations') {
+        setInitialSettingsTab('integrations');
+        setIsSettingsOpen(true);
+      }
+      window.history.replaceState({}, '', '/chat');
+    }
+  }, [searchParams, handleNewIntegration]);
 
   // Handle education response
   const handleEducationResponse = useCallback(async (accepted: boolean) => {
@@ -142,6 +157,11 @@ function ChatPageContent() {
 
       // Optionally speak the education (summarized version)
       try {
+        // Ensure audio context is resumed
+        if (audioContextRef.current?.state === 'suspended') {
+          await audioContextRef.current.resume();
+        }
+
         const response = await fetch('/api/zenna/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -151,14 +171,28 @@ function ChatPageContent() {
         });
 
         const data = await response.json();
+        console.log('Education speak response:', { hasAudioUrl: !!data.audioUrl, success: data.success });
+
         if (data.audioUrl) {
           const audio = new Audio(data.audioUrl);
-          audio.onended = () => setZennaState('idle');
-          await audio.play().catch(() => setZennaState('idle'));
+          audio.onended = () => {
+            console.log('Education audio ended');
+            setZennaState('idle');
+          };
+          audio.onerror = (e) => {
+            console.error('Education audio error:', e);
+            setZennaState('idle');
+          };
+          await audio.play().catch((err) => {
+            console.error('Education audio play failed:', err);
+            setZennaState('idle');
+          });
         } else {
+          console.warn('No audio URL returned from speak API for education');
           setZennaState('idle');
         }
-      } catch {
+      } catch (error) {
+        console.error('Education speak error:', error);
         setZennaState('idle');
       }
     }
@@ -220,6 +254,16 @@ function ChatPageContent() {
   const handleUserMessage = useCallback(async (text: string) => {
     if (!text.trim()) return;
 
+    // Ensure audio context is initialized (may not have been if user typed first message)
+    if (!audioContextRef.current) {
+      try {
+        audioContextRef.current = new AudioContext();
+        console.log('AudioContext initialized for chat');
+      } catch (err) {
+        console.warn('Failed to create AudioContext:', err);
+      }
+    }
+
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -260,13 +304,33 @@ function ChatPageContent() {
         // Play audio response
         if (data.audioUrl) {
           try {
+            // Ensure audio context is resumed (required after first user interaction)
+            if (audioContextRef.current?.state === 'suspended') {
+              await audioContextRef.current.resume();
+            }
+
             const audio = new Audio(data.audioUrl);
-            audio.onended = () => setZennaState('idle');
+
+            // Log audio details for debugging
+            console.log('Playing chat audio response:', {
+              audioUrlLength: data.audioUrl.length,
+              audioUrlPrefix: data.audioUrl.substring(0, 50),
+            });
+
+            audio.onended = () => {
+              console.log('Chat audio playback ended');
+              setZennaState('idle');
+            };
             audio.onerror = (e) => {
               console.error('Audio playback error:', e);
               setZennaState('idle');
             };
+            audio.oncanplaythrough = () => {
+              console.log('Audio can play through, starting playback...');
+            };
+
             await audio.play();
+            console.log('Chat audio play() called successfully');
           } catch (err) {
             console.error('Audio playback failed:', err);
             setZennaState('idle');
@@ -382,6 +446,67 @@ function ChatPageContent() {
     router.push('/login');
   }, [router]);
 
+  // Handle Notion knowledge ingestion completion
+  const handleIngestionComplete = useCallback(async () => {
+    // Add completion message to transcript
+    const completionMessage: Message = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: "Your Notion workspace has been successfully connected. I'm ready to answer questions about your content.",
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, completionMessage]);
+    setZennaState('speaking');
+    setCurrentEmotion('joy');
+
+    // Trigger TTS announcement
+    try {
+      // Ensure audio context is resumed
+      if (audioContextRef.current?.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+
+      const response = await fetch('/api/zenna/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: "Your Notion workspace has been successfully connected. I'm ready to answer questions about your content.",
+        }),
+      });
+
+      const data = await response.json();
+      console.log('Ingestion completion speak response:', { hasAudioUrl: !!data.audioUrl, success: data.success });
+
+      if (data.audioUrl) {
+        const audio = new Audio(data.audioUrl);
+        audio.onended = () => {
+          console.log('Ingestion completion audio ended');
+          setZennaState('idle');
+          setCurrentEmotion('helpful');
+        };
+        audio.onerror = (e) => {
+          console.error('Ingestion completion audio error:', e);
+          setZennaState('idle');
+          setCurrentEmotion('helpful');
+        };
+        await audio.play().catch((err) => {
+          console.error('Ingestion completion audio play failed:', err);
+          setZennaState('idle');
+          setCurrentEmotion('helpful');
+        });
+      } else {
+        console.warn('No audio URL returned from speak API for ingestion completion');
+        setZennaState('idle');
+        setCurrentEmotion('helpful');
+      }
+    } catch (error) {
+      console.error('Failed to speak ingestion completion:', error);
+      setZennaState('idle');
+      setCurrentEmotion('helpful');
+    }
+  }, []);
+
   if (isLoading) {
     return (
       <main className="min-h-screen flex items-center justify-center">
@@ -427,7 +552,7 @@ function ChatPageContent() {
   return (
     <main className="min-h-screen flex flex-col">
       {/* Knowledge Ingestion Progress Indicator */}
-      <KnowledgeIngestionIndicator />
+      <KnowledgeIngestionIndicator onIngestionComplete={handleIngestionComplete} />
 
       {/* Header */}
       <header className="h-16 border-b border-zenna-border flex items-center justify-between px-6">
@@ -466,45 +591,61 @@ function ChatPageContent() {
       </header>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Panel - Avatar */}
-        <div className="w-1/3 min-w-[300px] max-w-[500px] border-r border-zenna-border flex flex-col items-center justify-center p-8">
-          <Avatar state={zennaState} avatarUrl={avatarUrl} emotion={currentEmotion} newIntegration={newIntegration} />
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Left Panel - Avatar (Fixed Position) */}
+        <div className="fixed left-0 top-16 bottom-0 w-[40%] min-w-[300px] max-w-[500px] border-r border-zenna-border flex flex-col bg-zenna-bg z-10 overflow-hidden">
+          {/* Avatar fills the panel */}
+          <div className="flex-1 w-full flex items-center justify-center overflow-hidden">
+            <Avatar state={zennaState} avatarUrl={avatarUrl} emotion={currentEmotion} newIntegration={newIntegration} fillContainer />
+          </div>
 
-          {/* Microphone Button */}
-          <button
-            onClick={handleMicClick}
-            disabled={zennaState === 'thinking' || zennaState === 'speaking'}
-            className={`mt-8 w-16 h-16 rounded-full flex items-center justify-center transition-all relative ${
-              zennaState === 'listening'
-                ? 'bg-red-500 hover:bg-red-600 voice-pulse'
-                : 'bg-zenna-accent hover:bg-indigo-600'
-            } ${(zennaState === 'thinking' || zennaState === 'speaking') ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              {zennaState === 'listening' ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              )}
-            </svg>
-          </button>
+          {/* Microphone Button - anchored at bottom */}
+          <div className="flex flex-col items-center pb-8 pt-4 flex-shrink-0">
+            <button
+              onClick={handleMicClick}
+              disabled={zennaState === 'thinking' || zennaState === 'speaking'}
+              className={`w-16 h-16 rounded-full flex items-center justify-center transition-all relative ${
+                zennaState === 'listening'
+                  ? 'bg-red-500 hover:bg-red-600 voice-pulse'
+                  : 'bg-zenna-accent hover:bg-indigo-600'
+              } ${(zennaState === 'thinking' || zennaState === 'speaking') ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {zennaState === 'listening' ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                )}
+              </svg>
+            </button>
 
-          {/* Current transcript preview */}
-          {currentTranscript && (
-            <p className="mt-4 text-sm text-zenna-muted text-center max-w-[250px] truncate">
-              "{currentTranscript}"
-            </p>
-          )}
+            {/* Current transcript preview */}
+            {currentTranscript && (
+              <p className="mt-4 text-sm text-zenna-muted text-center max-w-[250px] truncate">
+                "{currentTranscript}"
+              </p>
+            )}
+          </div>
         </div>
+
+        {/* Spacer for fixed left panel */}
+        <div className="w-[40%] min-w-[300px] max-w-[500px] flex-shrink-0" />
 
         {/* Right Panel - Transcript & Artifacts */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Tabs or split view for transcript/artifacts */}
           <div className="flex-1 overflow-hidden flex">
-            {/* Transcript */}
-            <div className={`${artifacts.length > 0 ? 'w-1/2' : 'w-full'} overflow-hidden`}>
-              <Transcript messages={messages} />
+            {/* Transcript with Chat Input at top */}
+            <div className={`${artifacts.length > 0 ? 'w-1/2' : 'w-full'} overflow-hidden flex flex-col`}>
+              <Transcript
+                messages={messages}
+                chatInput={
+                  <ChatInput
+                    onSubmit={handleTextSubmit}
+                    disabled={zennaState === 'listening' || zennaState === 'thinking' || zennaState === 'speaking'}
+                  />
+                }
+              />
             </div>
 
             {/* Artifact Canvas */}
@@ -514,18 +655,18 @@ function ChatPageContent() {
               </div>
             )}
           </div>
-
-          {/* Chat Input */}
-          <ChatInput
-            onSubmit={handleTextSubmit}
-            disabled={zennaState === 'listening' || zennaState === 'thinking' || zennaState === 'speaking'}
-          />
         </div>
       </div>
 
       {/* Settings Panel */}
       {isSettingsOpen && (
-        <SettingsPanel onClose={() => setIsSettingsOpen(false)} />
+        <SettingsPanel
+          onClose={() => {
+            setIsSettingsOpen(false);
+            setInitialSettingsTab(null);
+          }}
+          initialTab={initialSettingsTab as 'general' | 'llm' | 'integrations' | 'master' | undefined}
+        />
       )}
 
       {/* Integration Education Prompt */}

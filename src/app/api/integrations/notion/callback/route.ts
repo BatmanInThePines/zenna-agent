@@ -102,9 +102,9 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Redirect back to chat with success
+    // Redirect back to chat with success, opening settings to integrations tab
     return NextResponse.redirect(
-      new URL('/chat?notion_connected=true', process.env.NEXT_PUBLIC_APP_URL!)
+      new URL('/chat?notion_connected=true&open_settings=integrations', process.env.NEXT_PUBLIC_APP_URL!)
     );
   } catch (error) {
     console.error('Notion callback error:', error);

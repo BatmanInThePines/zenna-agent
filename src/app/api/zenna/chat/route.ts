@@ -119,6 +119,13 @@ export async function POST(request: NextRequest) {
     const hasElevenLabsKey = !!process.env.ELEVENLABS_API_KEY;
     const hasElevenLabsVoice = !!process.env.ELEVENLABS_VOICE_ID;
 
+    console.log('TTS config check:', {
+      hasElevenLabsKey,
+      hasElevenLabsVoice,
+      responseTextLength: responseText.length,
+      responseTextPreview: responseText.substring(0, 100),
+    });
+
     if (!hasElevenLabsKey || !hasElevenLabsVoice) {
       console.warn('TTS disabled - missing env vars:', {
         ELEVENLABS_API_KEY: hasElevenLabsKey ? 'set' : 'MISSING',
@@ -128,7 +135,7 @@ export async function POST(request: NextRequest) {
 
     if (hasElevenLabsKey && hasElevenLabsVoice) {
       try {
-        console.log('Generating TTS audio...');
+        console.log('Generating TTS audio for chat response...');
         const ttsProvider = new ElevenLabsTTSProvider({
           apiKey: process.env.ELEVENLABS_API_KEY!,
           voiceId: process.env.ELEVENLABS_VOICE_ID!,
@@ -137,17 +144,20 @@ export async function POST(request: NextRequest) {
         const result = await ttsProvider.synthesize(responseText);
 
         if (!result.audioBuffer || result.audioBuffer.byteLength === 0) {
-          console.error('TTS returned empty audio buffer');
+          console.error('TTS returned empty audio buffer for chat response');
         } else {
-          console.log(`TTS audio generated: ${result.audioBuffer.byteLength} bytes`);
+          console.log(`TTS chat audio generated: ${result.audioBuffer.byteLength} bytes`);
           // Convert audio buffer to base64 data URL
           const base64 = Buffer.from(result.audioBuffer).toString('base64');
           audioUrl = `data:audio/mpeg;base64,${base64}`;
+          console.log('TTS audio URL created, length:', audioUrl.length);
         }
       } catch (error) {
-        console.error('TTS synthesis error:', error);
+        console.error('TTS synthesis error for chat:', error);
         // Continue without audio
       }
+    } else {
+      console.log('TTS skipped due to missing credentials');
     }
 
     // Analyze response tone/emotion for avatar color
