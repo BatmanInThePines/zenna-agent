@@ -28,9 +28,11 @@ async function getCurrentUser(): Promise<{ id: string; username: string } | null
       process.env.AUTH_SECRET || 'zenna-default-secret-change-me'
     );
     const { payload } = await jose.jwtVerify(token, secret);
+    const userId = (payload.userId as string) || (payload.sub as string);
+    if (!userId) return null;
     return {
-      id: payload.sub as string,
-      username: payload.username as string,
+      id: userId,
+      username: (payload.username as string) || userId,
     };
   } catch {
     return null;
