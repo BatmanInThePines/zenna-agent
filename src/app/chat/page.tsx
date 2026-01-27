@@ -609,10 +609,17 @@ function ChatPageContent() {
     }
   }, [zennaState, startAlwaysListening, stopAlwaysListening]);
 
-  // Handle microphone button click - record and transcribe
+  // Handle microphone button click - record with VAD-based end-of-speech detection
   const handleMicClick = useCallback(async () => {
+    // If already listening, manually stop and process
     if (zennaState === 'listening') {
-      // Stop listening and process recording
+      console.log('[VAD] Manual stop triggered');
+      // Stop VAD monitoring
+      if (vadIntervalRef.current) {
+        clearInterval(vadIntervalRef.current);
+        vadIntervalRef.current = null;
+      }
+      // Stop recording and process
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
       }
@@ -621,18 +628,46 @@ function ChatPageContent() {
 
     try {
       // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
       streamRef.current = stream;
 
-      // Initialize audio context if needed
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContext();
-      }
+      // Initialize audio context for VAD
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+
+      // Create analyser for VAD
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.3;
+      analyserRef.current = analyser;
+
+      // Connect microphone to analyser
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      // Initialize VAD state
+      const dataArray = new Float32Array(analyser.fftSize);
+      let hasCapturedSpeech = false;
+      let silenceStartTime: number | null = null;
+      let speechStartTime: number | null = null;
+      const SILENCE_THRESHOLD = 0.015; // RMS threshold for silence
+      const SILENCE_DURATION_MS = 1200; // 1.2 seconds of silence = end of speech
+      const MIN_SPEECH_DURATION_MS = 300; // Minimum speech to be valid
 
       setZennaState('listening');
-      setCurrentEmotion('curious'); // Attentive when listening
-      setCurrentTranscript('Recording...');
+      setCurrentEmotion('curious');
+      setCurrentTranscript('Listening...');
       audioChunksRef.current = [];
+
+      console.log('[VAD] Push-to-talk started with VAD');
+      console.log('[VAD] Silence threshold:', SILENCE_THRESHOLD);
+      console.log('[VAD] Silence duration for end-of-speech:', SILENCE_DURATION_MS, 'ms');
 
       // Set up media recorder
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -645,37 +680,64 @@ function ChatPageContent() {
       };
 
       mediaRecorder.onstop = async () => {
+        console.log('[VAD] Recording stopped, processing audio...');
+
         // Stop all tracks
         stream.getTracks().forEach(track => track.stop());
 
+        // Stop VAD monitoring
+        if (vadIntervalRef.current) {
+          clearInterval(vadIntervalRef.current);
+          vadIntervalRef.current = null;
+        }
+
+        // Close audio context
+        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+          await audioContextRef.current.close();
+        }
+
         setCurrentTranscript('Transcribing...');
         setZennaState('thinking');
+        setAudioLevel(0);
 
         // Combine audio chunks into a single blob
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        console.log('[VAD] Audio blob size:', audioBlob.size, 'bytes');
+
+        // Only process if there's enough audio
+        if (audioBlob.size < 1000) {
+          console.log('[VAD] Audio too short, ignoring');
+          setCurrentTranscript('');
+          setZennaState('idle');
+          return;
+        }
 
         try {
           // Send to transcription API
           const formData = new FormData();
           formData.append('audio', audioBlob, 'recording.webm');
 
+          console.log('[PROCESS] Sending to transcription API...');
           const response = await fetch('/api/zenna/transcribe', {
             method: 'POST',
             body: formData,
           });
 
           const data = await response.json();
+          console.log('[PROCESS] Transcription result:', data.transcript ? data.transcript.substring(0, 50) + '...' : '(empty)');
 
           if (data.transcript && data.transcript.trim()) {
             setCurrentTranscript(data.transcript);
             // Process the transcript as a message
+            console.log('[PROCESS] Sending to AI...');
             handleUserMessage(data.transcript);
           } else {
+            console.log('[VAD] No speech detected in transcription');
             setCurrentTranscript('');
             setZennaState('idle');
           }
         } catch (error) {
-          console.error('Transcription error:', error);
+          console.error('[VAD] Transcription error:', error);
           setCurrentTranscript('');
           setZennaState('error');
           setTimeout(() => setZennaState('idle'), 3000);
@@ -685,8 +747,83 @@ function ChatPageContent() {
       // Start recording
       mediaRecorder.start(100);
 
+      // Start VAD monitoring loop
+      vadIntervalRef.current = setInterval(() => {
+        if (!analyserRef.current) return;
+
+        analyserRef.current.getFloatTimeDomainData(dataArray);
+
+        // Calculate RMS energy
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i] * dataArray[i];
+        }
+        const rms = Math.sqrt(sum / dataArray.length);
+
+        // Update visual audio level (normalized to 0-1)
+        const normalizedLevel = Math.min(1, rms * 15);
+        setAudioLevel(normalizedLevel);
+
+        const now = Date.now();
+        const isSpeaking = rms > SILENCE_THRESHOLD;
+
+        if (isSpeaking) {
+          // Speech detected
+          if (!hasCapturedSpeech) {
+            hasCapturedSpeech = true;
+            speechStartTime = now;
+            console.log('[VAD] Speech started');
+            setCurrentTranscript('Listening... (speaking detected)');
+          }
+          // Reset silence timer when speech is detected
+          silenceStartTime = null;
+        } else if (hasCapturedSpeech) {
+          // Silence after speech was captured
+          if (!silenceStartTime) {
+            silenceStartTime = now;
+            console.log('[VAD] Silence detected, starting timer...');
+            setCurrentTranscript('Listening... (pause detected)');
+          } else {
+            const silenceDuration = now - silenceStartTime;
+
+            // Log silence duration periodically
+            if (silenceDuration % 200 < 50) {
+              console.log(`[VAD] Silence duration: ${silenceDuration}ms`);
+            }
+
+            // Check if silence duration exceeds threshold
+            if (silenceDuration >= SILENCE_DURATION_MS) {
+              // Check if we have enough speech
+              const speechDuration = speechStartTime ? (silenceStartTime - speechStartTime) : 0;
+
+              if (speechDuration >= MIN_SPEECH_DURATION_MS) {
+                console.log(`[VAD] END OF SPEECH CONFIRMED (speech: ${speechDuration}ms, silence: ${silenceDuration}ms)`);
+                setCurrentTranscript('Processing...');
+
+                // Stop VAD and trigger processing
+                if (vadIntervalRef.current) {
+                  clearInterval(vadIntervalRef.current);
+                  vadIntervalRef.current = null;
+                }
+
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                  mediaRecorderRef.current.stop();
+                }
+              } else {
+                console.log(`[VAD] Speech too short (${speechDuration}ms), waiting for more...`);
+                // Reset and wait for more speech
+                hasCapturedSpeech = false;
+                silenceStartTime = null;
+                speechStartTime = null;
+                setCurrentTranscript('Listening...');
+              }
+            }
+          }
+        }
+      }, 50); // Check every 50ms for responsive detection
+
     } catch (error) {
-      console.error('Microphone access denied:', error);
+      console.error('[VAD] Microphone access denied:', error);
       setZennaState('error');
       setTimeout(() => setZennaState('idle'), 3000);
     }
