@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import * as jose from 'jose';
 import { getJobForUser } from '@/lib/avatar/supabase-reconstruction-store';
+import { checkAndProcessPrediction } from '@/lib/avatar/replicate-reconstruction';
 
 // =============================================================================
 // HELPERS
@@ -61,10 +62,31 @@ export async function GET(request: NextRequest) {
     }
 
     // Get job from Supabase (verifies ownership)
-    const job = await getJobForUser(jobId, user.id);
+    let job = await getJobForUser(jobId, user.id);
 
     if (!job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+    }
+
+    // Polling fallback: if job is stuck in processing with a prediction ID,
+    // check Replicate directly and process the result
+    if (
+      job.status === 'processing' &&
+      job.replicate_prediction_id &&
+      job.progress <= 20
+    ) {
+      const updatedAt = new Date(job.updated_at).getTime();
+      const stuckThresholdMs = 30_000; // 30 seconds
+      const isStuck = Date.now() - updatedAt > stuckThresholdMs;
+
+      if (isStuck) {
+        console.log(`Job ${jobId} appears stuck, polling Replicate prediction ${job.replicate_prediction_id}`);
+        const result = await checkAndProcessPrediction(jobId, job.replicate_prediction_id);
+        if (result.processed) {
+          // Re-fetch updated job
+          job = (await getJobForUser(jobId, user.id))!;
+        }
+      }
     }
 
     return NextResponse.json({

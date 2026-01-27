@@ -33,17 +33,17 @@ import {
 // CONFIG
 // =============================================================================
 
-// Base URL for webhooks - MUST be your production domain
+// Base URL for webhooks - use stable production domain, not deployment-specific URL
 const getBaseUrl = (): string => {
-  // In production, use the deployment URL
+  // Prefer explicit production URL (stable custom domain)
+  if (process.env.NEXT_PUBLIC_APP_URL && !process.env.NEXT_PUBLIC_APP_URL.includes('localhost')) {
+    return process.env.NEXT_PUBLIC_APP_URL;
+  }
+  // Fallback to Vercel deployment URL
   if (process.env.VERCEL_URL) {
     return `https://${process.env.VERCEL_URL}`;
   }
-  // Explicit production URL
-  if (process.env.NEXT_PUBLIC_APP_URL) {
-    return process.env.NEXT_PUBLIC_APP_URL;
-  }
-  // Fallback for development (webhooks won't work locally without ngrok/similar)
+  // Hardcoded fallback for production
   return 'https://zenna.anthonywestinc.com';
 };
 

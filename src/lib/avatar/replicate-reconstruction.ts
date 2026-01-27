@@ -18,6 +18,7 @@ import Replicate from 'replicate';
 import {
   updateJobStatus,
   updateJobOutput,
+  updateJobPredictionId,
   uploadModel,
   getJob,
 } from './supabase-reconstruction-store';
@@ -82,9 +83,8 @@ function getReplicateClient(): Replicate {
 // TRELLIS MODEL CONFIG
 // =============================================================================
 
-// TRELLIS model for image-to-3D
+// TRELLIS model for image-to-3D (use model name only to always get latest version)
 const TRELLIS_MODEL = 'firtoz/trellis';
-const TRELLIS_VERSION = 'e8f6c45206993f297372f5436b90350817bd9b4a0d52d2a76df50c1c8afa2b3c';
 
 // Default settings optimized for avatar reconstruction
 const DEFAULT_TRELLIS_OPTIONS: Partial<TrellisInput> = {
@@ -125,9 +125,9 @@ export async function startReplicateReconstruction(
 
   try {
     // Create prediction with webhook
+    // Use model-only (no version) to always use the latest version
     const prediction = await replicate.predictions.create({
       model: TRELLIS_MODEL,
-      version: TRELLIS_VERSION,
       input: {
         ...DEFAULT_TRELLIS_OPTIONS,
         images: imageUrls,
@@ -138,7 +138,8 @@ export async function startReplicateReconstruction(
 
     console.log(`Started Replicate prediction ${prediction.id} for job ${jobId}`);
 
-    // Update job with prediction ID in metadata
+    // Store prediction ID for polling fallback
+    await updateJobPredictionId(jobId, prediction.id);
     await updateJobStatus(jobId, 'processing', 20);
 
     return prediction.id;
@@ -270,6 +271,40 @@ export async function processReplicateWebhook(
 }
 
 // =============================================================================
+// POLLING FALLBACK
+// =============================================================================
+
+/**
+ * Check a Replicate prediction and process it if complete.
+ * Used as a fallback when webhooks don't arrive.
+ * Called from the status endpoint when a job appears stuck.
+ */
+export async function checkAndProcessPrediction(
+  jobId: string,
+  predictionId: string
+): Promise<{ processed: boolean; status: string }> {
+  try {
+    const prediction = await pollReplicatePrediction(predictionId);
+
+    if (prediction.status === 'succeeded' || prediction.status === 'failed' || prediction.status === 'canceled') {
+      // Process it as if webhook arrived
+      await processReplicateWebhook(jobId, prediction);
+      return { processed: true, status: prediction.status };
+    }
+
+    // Still processing - update progress based on Replicate status
+    if (prediction.status === 'processing') {
+      await updateJobStatus(jobId, 'processing', 40);
+    }
+
+    return { processed: false, status: prediction.status };
+  } catch (error) {
+    console.error(`Failed to poll prediction ${predictionId}:`, error);
+    return { processed: false, status: 'error' };
+  }
+}
+
+// =============================================================================
 // DEVELOPMENT HELPER
 // =============================================================================
 
@@ -290,7 +325,7 @@ export async function runReconstructionSync(
 
     // Run the model and wait for completion
     const output = await replicate.run(
-      `${TRELLIS_MODEL}:${TRELLIS_VERSION}`,
+      TRELLIS_MODEL as `${string}/${string}`,
       {
         input: {
           ...DEFAULT_TRELLIS_OPTIONS,

@@ -82,6 +82,7 @@ export interface ReconstructionJob {
   input_paths: string[];
   output_model_url?: string | null;
   output_thumbnail_url?: string | null;
+  replicate_prediction_id?: string | null;
   created_at: string;
   updated_at: string;
   completed_at?: string | null;
@@ -99,6 +100,7 @@ interface DatabaseJob {
   input_paths: string[];
   output_model_url: string | null;
   output_thumbnail_url: string | null;
+  replicate_prediction_id: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -299,6 +301,28 @@ export async function updateJobOutput(
 }
 
 /**
+ * Update job with Replicate prediction ID for polling fallback.
+ */
+export async function updateJobPredictionId(
+  jobId: string,
+  predictionId: string
+): Promise<void> {
+  const client = getSupabaseClient();
+
+  const { error } = await client
+    .from('avatar_reconstruction_jobs')
+    .update({
+      replicate_prediction_id: predictionId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+
+  if (error) {
+    console.error('Failed to update prediction ID:', error);
+  }
+}
+
+/**
  * Delete old completed/failed jobs (cleanup).
  */
 export async function cleanupOldJobs(olderThanHours: number = 24): Promise<number> {
@@ -432,6 +456,7 @@ function mapDatabaseJob(row: DatabaseJob): ReconstructionJob {
     input_paths: row.input_paths || [],
     output_model_url: row.output_model_url,
     output_thumbnail_url: row.output_thumbnail_url,
+    replicate_prediction_id: row.replicate_prediction_id,
     created_at: row.created_at,
     updated_at: row.updated_at,
     completed_at: row.completed_at,
