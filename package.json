@@ -19,6 +19,8 @@
     "openai": "^4.70.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "replicate": "^1.4.0",
+    "three": "^0.170.0",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
@@ -26,6 +28,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.170.0",
     "@types/uuid": "^10",
     "dotenv": "^17.2.3",
     "eslint": "^9",

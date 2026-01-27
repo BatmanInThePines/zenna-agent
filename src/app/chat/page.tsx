@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Avatar, { type EmotionType } from '@/components/Avatar';
+import { AvatarRenderer, AvatarSettings, type EmotionType } from '@/components/avatar';
 import Transcript from '@/components/Transcript';
 import ArtifactCanvas from '@/components/ArtifactCanvas';
 import ChatInput from '@/components/ChatInput';
@@ -37,6 +37,9 @@ function ChatPageContent() {
   const [currentEmotion, setCurrentEmotion] = useState<EmotionType>('neutral');
   const [alwaysListening, setAlwaysListening] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [isAvatarSettingsOpen, setIsAvatarSettingsOpen] = useState(false);
+  const [avatarModelUrl, setAvatarModelUrl] = useState<string | undefined>(undefined);
+  const [avatarModelType, setAvatarModelType] = useState<'preset' | 'custom' | 'reconstructed' | '2d-fallback'>('2d-fallback');
 
   // Integration onboarding state
   const [newIntegration, setNewIntegration] = useState<string | null>(null);
@@ -990,7 +993,16 @@ function ChatPageContent() {
         <div className="fixed left-0 top-16 bottom-0 w-[40%] min-w-[300px] max-w-[500px] border-r border-zenna-border flex flex-col bg-zenna-bg z-10 overflow-hidden">
           {/* Avatar fills the panel */}
           <div className="flex-1 w-full flex items-center justify-center overflow-hidden">
-            <Avatar state={zennaState} avatarUrl={avatarUrl} emotion={currentEmotion} newIntegration={newIntegration} fillContainer />
+            <AvatarRenderer
+              state={zennaState}
+              avatarUrl={avatarUrl}
+              modelUrl={avatarModelUrl}
+              modelType={avatarModelType}
+              emotion={currentEmotion}
+              newIntegration={newIntegration}
+              fillContainer
+              prefer3D={true}
+            />
           </div>
 
           {/* Voice Controls - microphone, interrupt, always-listening toggle */}
@@ -1044,7 +1056,26 @@ function ChatPageContent() {
             setIsSettingsOpen(false);
             setInitialSettingsTab(null);
           }}
-          initialTab={initialSettingsTab as 'general' | 'llm' | 'integrations' | 'master' | undefined}
+          initialTab={initialSettingsTab as 'general' | 'llm' | 'integrations' | 'avatar' | 'master' | undefined}
+          onOpenAvatarSettings={() => setIsAvatarSettingsOpen(true)}
+        />
+      )}
+
+      {/* Avatar Settings Panel */}
+      {isAvatarSettingsOpen && (
+        <AvatarSettings
+          onClose={() => setIsAvatarSettingsOpen(false)}
+          onAvatarChange={(url: string, type: 'preset' | 'custom' | 'reconstructed' | '2d-fallback') => {
+            if (type === '2d-fallback') {
+              setAvatarUrl(url);
+              setAvatarModelType('2d-fallback');
+            } else {
+              setAvatarModelUrl(url);
+              setAvatarModelType(type);
+            }
+          }}
+          initialAvatarUrl={avatarUrl}
+          initialModelType={avatarModelType}
         />
       )}
 

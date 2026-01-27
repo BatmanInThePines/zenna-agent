@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 interface SettingsPanelProps {
   onClose: () => void;
-  initialTab?: 'general' | 'llm' | 'integrations' | 'master';
+  initialTab?: 'general' | 'llm' | 'integrations' | 'avatar' | 'master';
+  onOpenAvatarSettings?: () => void;
 }
 
 interface UserSettings {
@@ -44,7 +45,7 @@ interface MasterSettings {
   greeting?: string;
 }
 
-type SettingsTab = 'general' | 'llm' | 'integrations' | 'master';
+type SettingsTab = 'general' | 'llm' | 'integrations' | 'avatar' | 'master';
 
 interface InfoTooltipProps {
   title: string;
@@ -84,7 +85,7 @@ function InfoTooltip({ title, description, howTo }: InfoTooltipProps) {
   );
 }
 
-export default function SettingsPanel({ onClose, initialTab }: SettingsPanelProps) {
+export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSettings }: SettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || 'general');
   const [settings, setSettings] = useState<UserSettings>({});
   const [masterSettings, setMasterSettings] = useState<MasterSettings>({});
@@ -466,6 +467,7 @@ export default function SettingsPanel({ onClose, initialTab }: SettingsPanelProp
     { id: 'general', label: 'General' },
     { id: 'llm', label: 'LLM' },
     { id: 'integrations', label: 'Integrations' },
+    { id: 'avatar', label: 'Avatar' },
     ...(isFather ? [{ id: 'master' as const, label: 'Master' }] : []),
   ];
 
@@ -959,6 +961,56 @@ export default function SettingsPanel({ onClose, initialTab }: SettingsPanelProp
                 <p className="text-xs text-zenna-muted">
                   Integration with Samsung SmartThings will be available in a future update.
                 </p>
+              </div>
+            </div>
+          )}
+
+          {/* Avatar Tab */}
+          {activeTab === 'avatar' && (
+            <div className="space-y-6">
+              <div className="text-center py-8">
+                <div className="w-24 h-24 mx-auto mb-6 bg-gradient-to-br from-zenna-accent/20 to-purple-500/20 rounded-full flex items-center justify-center">
+                  <svg className="w-12 h-12 text-zenna-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                </div>
+
+                <h3 className="text-lg font-medium mb-2">3D Avatar System</h3>
+                <p className="text-sm text-zenna-muted mb-6 max-w-md mx-auto">
+                  Create a personalized 3D avatar using preset models, customization options,
+                  or by uploading reference images for AI-powered 3D reconstruction.
+                </p>
+
+                <button
+                  onClick={() => {
+                    onClose();
+                    onOpenAvatarSettings?.();
+                  }}
+                  className="btn-primary px-8"
+                >
+                  Open Avatar Settings
+                </button>
+
+                <div className="mt-8 grid grid-cols-3 gap-4 max-w-md mx-auto">
+                  <div className="text-center">
+                    <div className="w-12 h-12 mx-auto mb-2 bg-zenna-surface rounded-lg flex items-center justify-center">
+                      <span className="text-xl">👤</span>
+                    </div>
+                    <p className="text-xs text-zenna-muted">Preset Models</p>
+                  </div>
+                  <div className="text-center">
+                    <div className="w-12 h-12 mx-auto mb-2 bg-zenna-surface rounded-lg flex items-center justify-center">
+                      <span className="text-xl">🎨</span>
+                    </div>
+                    <p className="text-xs text-zenna-muted">Customize</p>
+                  </div>
+                  <div className="text-center">
+                    <div className="w-12 h-12 mx-auto mb-2 bg-zenna-surface rounded-lg flex items-center justify-center">
+                      <span className="text-xl">📷</span>
+                    </div>
+                    <p className="text-xs text-zenna-muted">Upload Photos</p>
+                  </div>
+                </div>
               </div>
             </div>
           )}
