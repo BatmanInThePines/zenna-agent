@@ -8,6 +8,7 @@ import ArtifactCanvas from '@/components/ArtifactCanvas';
 import ChatInput from '@/components/ChatInput';
 import SettingsPanel from '@/components/SettingsPanel';
 import KnowledgeIngestionIndicator from '@/components/KnowledgeIngestionIndicator';
+import VoiceControls from '@/components/VoiceControls';
 import { INTEGRATION_MANIFESTS, getIntegrationEducation } from '@/core/interfaces/integration-manifest';
 
 interface Message {
@@ -29,10 +30,13 @@ function ChatPageContent() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [zennaState, setZennaState] = useState<ZennaState>('idle');
   const [currentTranscript, setCurrentTranscript] = useState('');
+  const [streamingResponse, setStreamingResponse] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [artifacts, setArtifacts] = useState<Array<{ type: string; content: unknown }>>([]);
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const [currentEmotion, setCurrentEmotion] = useState<EmotionType>('neutral');
+  const [alwaysListening, setAlwaysListening] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
 
   // Integration onboarding state
   const [newIntegration, setNewIntegration] = useState<string | null>(null);
@@ -43,6 +47,12 @@ function ChatPageContent() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const silenceStartRef = useRef<number>(0);
+  const isSpeakingRef = useRef(false);
 
   // Check authentication and load settings
   useEffect(() => {
@@ -250,9 +260,32 @@ function ChatPageContent() {
     }
   }, []);
 
-  // Handle user message (from voice or text)
+  // Interrupt current speech/processing
+  const interruptSpeaking = useCallback(() => {
+    // Stop audio playback
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.src = '';
+      currentAudioRef.current = null;
+    }
+
+    // Cancel any pending requests
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // Clear streaming state
+    setStreamingResponse('');
+    setZennaState('idle');
+  }, []);
+
+  // Handle user message (from voice or text) with streaming support
   const handleUserMessage = useCallback(async (text: string) => {
     if (!text.trim()) return;
+
+    // Interrupt any current activity
+    interruptSpeaking();
 
     // Ensure audio context is initialized (may not have been if user typed first message)
     if (!audioContextRef.current) {
@@ -273,84 +306,308 @@ function ChatPageContent() {
 
     setMessages(prev => [...prev, userMessage]);
     setCurrentTranscript('');
+    setStreamingResponse('');
     setZennaState('thinking');
-    setCurrentEmotion('thoughtful'); // Processing when thinking
+    setCurrentEmotion('thoughtful');
+
+    // Create abort controller for this request
+    abortControllerRef.current = new AbortController();
 
     try {
-      const response = await fetch('/api/zenna/chat', {
+      // Use streaming endpoint for real-time text updates
+      const response = await fetch('/api/zenna/chat-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
+        signal: abortControllerRef.current.signal,
       });
 
-      const data = await response.json();
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullText = '';
+      let emotion: string | undefined;
 
-      if (data.response) {
+      // Read streaming response
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.type === 'text') {
+                fullText += data.content;
+                setStreamingResponse(fullText);
+              } else if (data.type === 'complete') {
+                fullText = data.fullResponse;
+                emotion = data.emotion;
+              } else if (data.type === 'error') {
+                throw new Error(data.error);
+              }
+            } catch {
+              // Ignore parse errors for incomplete chunks
+            }
+          }
+        }
+      }
+
+      // Add complete message to transcript
+      if (fullText) {
         const assistantMessage: Message = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: data.response,
+          content: fullText,
           timestamp: new Date(),
         };
 
         setMessages(prev => [...prev, assistantMessage]);
-        setZennaState('speaking');
+        setStreamingResponse('');
 
-        // Update emotion based on response analysis
-        if (data.emotion) {
-          setCurrentEmotion(data.emotion as EmotionType);
+        // Update emotion
+        if (emotion) {
+          setCurrentEmotion(emotion as EmotionType);
         }
 
-        // Play audio response
-        if (data.audioUrl) {
-          try {
-            // Ensure audio context is resumed (required after first user interaction)
-            if (audioContextRef.current?.state === 'suspended') {
-              await audioContextRef.current.resume();
-            }
+        // Generate and play TTS audio
+        setZennaState('speaking');
 
-            const audio = new Audio(data.audioUrl);
+        try {
+          // Ensure audio context is resumed
+          if (audioContextRef.current?.state === 'suspended') {
+            await audioContextRef.current.resume();
+          }
 
-            // Log audio details for debugging
-            console.log('Playing chat audio response:', {
-              audioUrlLength: data.audioUrl.length,
-              audioUrlPrefix: data.audioUrl.substring(0, 50),
-            });
+          // Use streaming TTS endpoint for faster first audio
+          const ttsResponse = await fetch('/api/zenna/tts-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: fullText }),
+            signal: abortControllerRef.current?.signal,
+          });
+
+          if (ttsResponse.ok) {
+            // Convert stream to blob and play
+            const audioBlob = await ttsResponse.blob();
+            const audioUrl = URL.createObjectURL(audioBlob);
+
+            const audio = new Audio(audioUrl);
+            currentAudioRef.current = audio;
 
             audio.onended = () => {
-              console.log('Chat audio playback ended');
+              URL.revokeObjectURL(audioUrl);
+              currentAudioRef.current = null;
               setZennaState('idle');
+
+              // Auto-resume listening if always-listening is enabled
+              if (alwaysListening) {
+                startAlwaysListening();
+              }
             };
-            audio.onerror = (e) => {
-              console.error('Audio playback error:', e);
+
+            audio.onerror = () => {
+              URL.revokeObjectURL(audioUrl);
+              currentAudioRef.current = null;
               setZennaState('idle');
-            };
-            audio.oncanplaythrough = () => {
-              console.log('Audio can play through, starting playback...');
             };
 
             await audio.play();
-            console.log('Chat audio play() called successfully');
-          } catch (err) {
-            console.error('Audio playback failed:', err);
-            setZennaState('idle');
-          }
-        } else {
-          console.warn('No audio URL returned from chat API - check ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID env vars');
-          setZennaState('idle');
-        }
+          } else {
+            // Fall back to non-streaming endpoint
+            const fallbackResponse = await fetch('/api/zenna/speak', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: fullText }),
+            });
 
-        // Handle any artifacts
-        if (data.artifacts) {
-          setArtifacts(prev => [...prev, ...data.artifacts]);
+            const fallbackData = await fallbackResponse.json();
+
+            if (fallbackData.audioUrl) {
+              const audio = new Audio(fallbackData.audioUrl);
+              currentAudioRef.current = audio;
+
+              audio.onended = () => {
+                currentAudioRef.current = null;
+                setZennaState('idle');
+              };
+              audio.onerror = () => {
+                currentAudioRef.current = null;
+                setZennaState('idle');
+              };
+
+              await audio.play();
+            } else {
+              setZennaState('idle');
+            }
+          }
+        } catch (ttsError) {
+          if ((ttsError as Error).name !== 'AbortError') {
+            console.error('TTS error:', ttsError);
+          }
+          setZennaState('idle');
         }
       }
     } catch (error) {
+      if ((error as Error).name === 'AbortError') {
+        // Request was cancelled, ignore
+        return;
+      }
       console.error('Chat error:', error);
       setZennaState('error');
       setTimeout(() => setZennaState('idle'), 3000);
     }
+  }, [interruptSpeaking, alwaysListening]);
+
+  // Start always-listening mode with VAD
+  const startAlwaysListening = useCallback(async () => {
+    if (!alwaysListening) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      analyserRef.current = analyser;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      const dataArray = new Float32Array(analyser.fftSize);
+      silenceStartRef.current = 0;
+      isSpeakingRef.current = false;
+
+      // Start recording
+      audioChunksRef.current = [];
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.start(100);
+      setZennaState('listening');
+
+      // VAD loop
+      vadIntervalRef.current = setInterval(() => {
+        if (!analyserRef.current) return;
+
+        analyserRef.current.getFloatTimeDomainData(dataArray);
+
+        // Calculate RMS energy
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i] * dataArray[i];
+        }
+        const rms = Math.sqrt(sum / dataArray.length);
+        setAudioLevel(Math.min(1, rms * 10));
+
+        const threshold = 0.01;
+        const now = Date.now();
+
+        if (rms > threshold) {
+          isSpeakingRef.current = true;
+          silenceStartRef.current = 0;
+        } else if (isSpeakingRef.current) {
+          if (!silenceStartRef.current) {
+            silenceStartRef.current = now;
+          } else if (now - silenceStartRef.current > 1200) {
+            // 1.2 seconds of silence - process the audio
+            isSpeakingRef.current = false;
+
+            // Stop recording and process
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+              mediaRecorderRef.current.stop();
+
+              // Process after a short delay to ensure all data is captured
+              setTimeout(async () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+
+                if (audioBlob.size > 1000) { // Only process if there's enough audio
+                  setCurrentTranscript('Processing...');
+                  setZennaState('thinking');
+
+                  // Stop VAD while processing
+                  if (vadIntervalRef.current) {
+                    clearInterval(vadIntervalRef.current);
+                    vadIntervalRef.current = null;
+                  }
+
+                  // Transcribe
+                  const formData = new FormData();
+                  formData.append('audio', audioBlob, 'recording.webm');
+
+                  try {
+                    const transcribeResponse = await fetch('/api/zenna/transcribe', {
+                      method: 'POST',
+                      body: formData,
+                    });
+
+                    const transcribeData = await transcribeResponse.json();
+
+                    if (transcribeData.transcript && transcribeData.transcript.trim()) {
+                      setCurrentTranscript(transcribeData.transcript);
+                      await handleUserMessage(transcribeData.transcript);
+                    } else {
+                      // No speech detected, restart listening
+                      startAlwaysListening();
+                    }
+                  } catch (error) {
+                    console.error('Transcription error:', error);
+                    startAlwaysListening();
+                  }
+                }
+              }, 200);
+            }
+          }
+        }
+      }, 50);
+    } catch (error) {
+      console.error('VAD error:', error);
+      setAlwaysListening(false);
+    }
+  }, [alwaysListening, handleUserMessage]);
+
+  // Stop always-listening mode
+  const stopAlwaysListening = useCallback(() => {
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    setAudioLevel(0);
   }, []);
+
+  // Toggle always-listening mode
+  const toggleAlwaysListening = useCallback((enabled: boolean) => {
+    setAlwaysListening(enabled);
+
+    if (enabled && zennaState === 'idle') {
+      startAlwaysListening();
+    } else if (!enabled) {
+      stopAlwaysListening();
+      setZennaState('idle');
+    }
+  }, [zennaState, startAlwaysListening, stopAlwaysListening]);
 
   // Handle microphone button click - record and transcribe
   const handleMicClick = useCallback(async () => {
@@ -599,33 +856,17 @@ function ChatPageContent() {
             <Avatar state={zennaState} avatarUrl={avatarUrl} emotion={currentEmotion} newIntegration={newIntegration} fillContainer />
           </div>
 
-          {/* Microphone Button - anchored at bottom */}
-          <div className="flex flex-col items-center pb-8 pt-4 flex-shrink-0">
-            <button
-              onClick={handleMicClick}
-              disabled={zennaState === 'thinking' || zennaState === 'speaking'}
-              className={`w-16 h-16 rounded-full flex items-center justify-center transition-all relative ${
-                zennaState === 'listening'
-                  ? 'bg-red-500 hover:bg-red-600 voice-pulse'
-                  : 'bg-zenna-accent hover:bg-indigo-600'
-              } ${(zennaState === 'thinking' || zennaState === 'speaking') ? 'opacity-50 cursor-not-allowed' : ''}`}
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {zennaState === 'listening' ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                )}
-              </svg>
-            </button>
-
-            {/* Current transcript preview */}
-            {currentTranscript && (
-              <p className="mt-4 text-sm text-zenna-muted text-center max-w-[250px] truncate">
-                "{currentTranscript}"
-              </p>
-            )}
-          </div>
+          {/* Voice Controls - microphone, interrupt, always-listening toggle */}
+          <VoiceControls
+            state={zennaState}
+            audioLevel={audioLevel}
+            alwaysListening={alwaysListening}
+            onMicClick={handleMicClick}
+            onStopSpeaking={interruptSpeaking}
+            onToggleAlwaysListening={toggleAlwaysListening}
+            currentTranscript={currentTranscript || streamingResponse}
+            disabled={false}
+          />
         </div>
 
         {/* Spacer for fixed left panel */}
@@ -639,6 +880,7 @@ function ChatPageContent() {
             <div className={`${artifacts.length > 0 ? 'w-1/2' : 'w-full'} overflow-hidden flex flex-col`}>
               <Transcript
                 messages={messages}
+                streamingResponse={streamingResponse}
                 chatInput={
                   <ChatInput
                     onSubmit={handleTextSubmit}

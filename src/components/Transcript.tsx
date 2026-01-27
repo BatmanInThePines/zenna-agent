@@ -17,6 +17,7 @@ interface Message {
 interface TranscriptProps {
   messages: Message[];
   chatInput?: ReactNode; // Chat input component to render at top
+  streamingResponse?: string; // Real-time streaming response (shown before complete)
 }
 
 // Component to render message content with rich media support
@@ -132,7 +133,7 @@ function MessageContent({ message }: { message: Message }) {
   );
 }
 
-export default function Transcript({ messages, chatInput }: TranscriptProps) {
+export default function Transcript({ messages, chatInput, streamingResponse }: TranscriptProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Scroll to show newest messages (which are at the top in reverse chronological order)
@@ -141,7 +142,7 @@ export default function Transcript({ messages, chatInput }: TranscriptProps) {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
     }
-  }, [messages]);
+  }, [messages, streamingResponse]);
 
   const formatTime = (date: Date) => {
     return new Intl.DateTimeFormat('en-US', {
@@ -168,7 +169,25 @@ export default function Transcript({ messages, chatInput }: TranscriptProps) {
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto p-6 space-y-4"
       >
-        {messages.length === 0 ? (
+        {/* Streaming response (shown in real-time before complete) */}
+        {streamingResponse && (
+          <div className="p-4 rounded-lg transcript-assistant border-l-4 border-zenna-accent animate-pulse">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-medium text-zenna-muted uppercase tracking-wider">
+                Zenna
+              </span>
+              <span className="text-xs text-zenna-accent">
+                typing...
+              </span>
+            </div>
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">
+              {streamingResponse}
+              <span className="inline-block w-2 h-4 ml-1 bg-zenna-accent animate-pulse" />
+            </p>
+          </div>
+        )}
+
+        {messages.length === 0 && !streamingResponse ? (
           <div className="h-full flex items-center justify-center text-zenna-muted">
             <p className="text-center">
               Zenna is ready to assist you.<br />
