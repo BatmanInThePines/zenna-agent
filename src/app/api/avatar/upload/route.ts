@@ -78,10 +78,14 @@ function validateImage(
 
 export async function POST(request: NextRequest) {
   try {
+    console.log('[avatar/upload] Starting image upload...');
+
     const user = await getCurrentUser();
     if (!user) {
+      console.log('[avatar/upload] Unauthorized - no valid session');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    console.log('[avatar/upload] User authenticated:', user.id);
 
     const formData = await request.formData();
     const image = formData.get('image') as File | null;
@@ -90,26 +94,31 @@ export async function POST(request: NextRequest) {
     if (!image) {
       return NextResponse.json({ error: 'No image provided' }, { status: 400 });
     }
+    console.log(`[avatar/upload] Image: ${image.name}, size: ${image.size}, type: ${image.type}, angle: ${angle}`);
 
     const buffer = Buffer.from(await image.arrayBuffer());
     const validation = validateImage(buffer, image.name);
 
     if (!validation.valid) {
+      console.log('[avatar/upload] Validation failed:', validation.errors);
       return NextResponse.json(
         { error: `Validation failed: ${validation.errors.join(', ')}` },
         { status: 400 }
       );
     }
+    console.log(`[avatar/upload] Validated as ${validation.contentType}, buffer size: ${buffer.length}`);
 
     const ext = image.name.split('.').pop() || 'png';
     const filename = `${angle}_${Date.now()}.${ext}`;
     const tempJobId = `upload-${user.id}-${Date.now()}`;
 
+    console.log(`[avatar/upload] Uploading to Supabase: ${tempJobId}/${filename}`);
     const url = await uploadImage(buffer, filename, tempJobId, validation.contentType);
+    console.log(`[avatar/upload] Upload successful: ${url}`);
 
     return NextResponse.json({ success: true, url });
   } catch (error) {
-    console.error('Image upload error:', error);
+    console.error('[avatar/upload] Error:', error);
     const message = error instanceof Error ? error.message : 'Failed to upload image';
     return NextResponse.json({ error: message }, { status: 500 });
   }

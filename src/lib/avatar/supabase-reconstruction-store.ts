@@ -370,7 +370,7 @@ export async function uploadImage(
 
   if (error) {
     console.error('Failed to upload image:', error);
-    throw new Error('Failed to upload image');
+    throw new Error(`Failed to upload image to storage: ${error.message}`);
   }
 
   // Get public URL
