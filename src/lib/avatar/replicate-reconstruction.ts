@@ -83,8 +83,10 @@ function getReplicateClient(): Replicate {
 // TRELLIS MODEL CONFIG
 // =============================================================================
 
-// TRELLIS model for image-to-3D (use model name only to always get latest version)
+// TRELLIS model for image-to-3D
 const TRELLIS_MODEL = 'firtoz/trellis';
+// Latest version hash - required for predictions.create() API (model-only endpoint returns 404 for community models)
+const TRELLIS_VERSION = 'e8f6c45206993f297372f5436b90350817bd9b4a0d52d2a76df50c1c8afa2b3c';
 
 // Default settings optimized for avatar reconstruction
 const DEFAULT_TRELLIS_OPTIONS: Partial<TrellisInput> = {
@@ -125,9 +127,9 @@ export async function startReplicateReconstruction(
 
   try {
     // Create prediction with webhook
-    // Use model-only (no version) to always use the latest version
+    // Use version-based API (model-only endpoint returns 404 for community models)
     const prediction = await replicate.predictions.create({
-      model: TRELLIS_MODEL,
+      version: TRELLIS_VERSION,
       input: {
         ...DEFAULT_TRELLIS_OPTIONS,
         images: imageUrls,
@@ -325,7 +327,7 @@ export async function runReconstructionSync(
 
     // Run the model and wait for completion
     const output = await replicate.run(
-      TRELLIS_MODEL as `${string}/${string}`,
+      `${TRELLIS_MODEL}:${TRELLIS_VERSION}` as `${string}/${string}:${string}`,
       {
         input: {
           ...DEFAULT_TRELLIS_OPTIONS,
