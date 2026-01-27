@@ -37,83 +37,6 @@ interface AvatarProps {
   fillContainer?: boolean; // If true, avatar will expand to fill its container
 }
 
-/**
- * Remove dark/green background from avatar image
- * Detects corner pixels to find background color and makes similar colors transparent
- */
-function removeBackground(img: HTMLImageElement): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return canvas;
-
-  // Draw original image
-  ctx.drawImage(img, 0, 0);
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-
-  // Sample corner pixels to detect background color
-  const corners = [
-    0, // top-left
-    (canvas.width - 1) * 4, // top-right
-    (canvas.height - 1) * canvas.width * 4, // bottom-left
-    ((canvas.height - 1) * canvas.width + (canvas.width - 1)) * 4, // bottom-right
-  ];
-
-  // Get average background color from corners
-  let bgR = 0, bgG = 0, bgB = 0;
-  for (const idx of corners) {
-    bgR += data[idx];
-    bgG += data[idx + 1];
-    bgB += data[idx + 2];
-  }
-  bgR = Math.round(bgR / 4);
-  bgG = Math.round(bgG / 4);
-  bgB = Math.round(bgB / 4);
-
-  // Color distance threshold - pixels similar to background will be made transparent
-  // Higher value = more aggressive background removal
-  const threshold = 60;
-
-  // Additional check for dark colors (the green-ish dark background)
-  const isDarkBackground = bgR < 80 && bgG < 80 && bgB < 80;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-
-    // Calculate color distance from background
-    const distance = Math.sqrt(
-      Math.pow(r - bgR, 2) +
-      Math.pow(g - bgG, 2) +
-      Math.pow(b - bgB, 2)
-    );
-
-    // Check if pixel is similar to background color
-    if (distance < threshold) {
-      // Make pixel transparent
-      data[i + 3] = 0;
-    }
-    // Also remove very dark pixels (likely part of dark background)
-    else if (isDarkBackground && r < 40 && g < 50 && b < 40) {
-      data[i + 3] = 0;
-    }
-    // Remove greenish-dark pixels that are common in the background
-    else if (r < 50 && g > r && g < 70 && b < 50) {
-      // Greenish dark - fade based on how green it is
-      const greenness = g - Math.max(r, b);
-      if (greenness > 5) {
-        data[i + 3] = Math.max(0, data[i + 3] - greenness * 10);
-      }
-    }
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-  return canvas;
-}
-
 export default function Avatar({
   state,
   avatarUrl,
@@ -124,7 +47,7 @@ export default function Avatar({
 }: AvatarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const processedImageRef = useRef<HTMLCanvasElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
   const animationRef = useRef<number>(0);
   const timeRef = useRef(0);
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -214,16 +137,15 @@ export default function Avatar({
     }
   }, [state]);
 
-  // Load and process image (remove background)
+  // Load image - preserves original PNG transparency
   useEffect(() => {
     const img = new window.Image();
     img.crossOrigin = 'anonymous';
     img.src = currentAvatarUrl;
 
     img.onload = () => {
-      // Process image to remove background
-      const processedCanvas = removeBackground(img);
-      processedImageRef.current = processedCanvas;
+      // Store reference to original image (preserves PNG transparency)
+      imageRef.current = img;
 
       // Calculate dimensions to fit within canvas while preserving aspect ratio
       const maxSize = canvasSize * 0.85; // Leave padding for glow effects
@@ -242,7 +164,7 @@ export default function Avatar({
 
   // Main animation loop
   useEffect(() => {
-    if (!imageLoaded || !processedImageRef.current) return;
+    if (!imageLoaded || !imageRef.current) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -251,13 +173,13 @@ export default function Avatar({
     if (!ctx) return;
 
     const animate = () => {
-      if (!canvas || !ctx || !processedImageRef.current) return;
+      if (!canvas || !ctx || !imageRef.current) return;
 
       timeRef.current += 0.016;
       const time = timeRef.current;
       const config = stateConfig;
 
-      // Clear canvas
+      // Clear canvas with transparency preserved
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const centerX = canvas.width / 2;
@@ -270,7 +192,7 @@ export default function Avatar({
       const imgX = centerX - imageDimensions.width / 2;
       const imgY = centerY - imageDimensions.height / 2;
 
-      // Draw the processed avatar image (with background removed)
+      // Draw the original avatar image - PNG transparency is preserved automatically
       ctx.save();
 
       // Apply breathing scale
@@ -278,9 +200,9 @@ export default function Avatar({
       ctx.scale(breathe, breathe);
       ctx.translate(-centerX, -centerY);
 
-      // Draw processed image (background already removed)
+      // Draw original image - canvas 2D context preserves PNG alpha channel
       ctx.drawImage(
-        processedImageRef.current,
+        imageRef.current,
         imgX,
         imgY,
         imageDimensions.width,
