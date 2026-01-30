@@ -69,6 +69,12 @@ function ChatPageContent() {
           return;
         }
 
+        // Redirect to paywall if user hasn't completed onboarding
+        if (!data.user?.onboardingCompleted) {
+          router.push('/paywall');
+          return;
+        }
+
         setIsAuthenticated(true);
 
         // Load avatar settings (user's personal avatar or master default)

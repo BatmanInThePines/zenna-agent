@@ -24,7 +24,12 @@ function HomeContent() {
         const data = await response.json();
 
         if (data.authenticated) {
-          router.push('/chat');
+          // Check if user has completed onboarding (selected a subscription)
+          if (!data.user?.onboardingCompleted) {
+            router.push('/paywall');
+          } else {
+            router.push('/chat');
+          }
         } else {
           setShowAuth(true);
         }
