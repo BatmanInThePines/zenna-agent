@@ -1,14 +1,5 @@
 import { NextRequest } from 'next/server';
-import { cookies } from 'next/headers';
-import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
-
-function getIdentityStore() {
-  return new SupabaseIdentityStore({
-    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    jwtSecret: process.env.AUTH_SECRET!,
-  });
-}
+import { auth } from '@/lib/auth';
 
 /**
  * Streaming TTS API Endpoint
@@ -17,21 +8,11 @@ function getIdentityStore() {
  * This provides faster time-to-first-audio than waiting for complete synthesis.
  */
 export async function POST(request: NextRequest) {
-  const identityStore = getIdentityStore();
   try {
-    // Verify authentication
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    // Verify authentication using NextAuth
+    const session = await auth();
 
-    if (!token) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
+    if (!session?.user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' },
@@ -108,7 +89,7 @@ export async function POST(request: NextRequest) {
 /**
  * Chunked TTS endpoint - breaks text into sentences for faster first audio
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   // Return API info
   return new Response(JSON.stringify({
     endpoint: '/api/zenna/tts-stream',

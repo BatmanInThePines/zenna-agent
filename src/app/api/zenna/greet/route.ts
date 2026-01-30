@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import { ElevenLabsTTSProvider } from '@/core/providers/voice/elevenlabs-tts';
 
@@ -12,22 +12,16 @@ function getIdentityStore() {
 }
 
 export async function POST() {
-  const identityStore = getIdentityStore();
   try {
-    // Verify authentication
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    // Verify authentication using NextAuth
+    const session = await auth();
 
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
+    if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Get master config for greeting
+    const identityStore = getIdentityStore();
     const masterConfig = await identityStore.getMasterConfig();
     const greeting = masterConfig.greeting || 'Welcome. How may I assist?';
 

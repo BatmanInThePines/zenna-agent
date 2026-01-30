@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import { brainProviderFactory } from '@/core/providers/brain';
 import { ElevenLabsTTSProvider } from '@/core/providers/voice/elevenlabs-tts';
@@ -19,18 +19,14 @@ function getIdentityStore() {
 export async function POST(request: NextRequest) {
   const identityStore = getIdentityStore();
   try {
-    // Verify authentication
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    // Verify authentication using NextAuth
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = session.user.id;
 
     const { message } = await request.json();
 
@@ -40,7 +36,7 @@ export async function POST(request: NextRequest) {
 
     // Get user and master config
     const [user, masterConfig] = await Promise.all([
-      identityStore.getUser(payload.userId),
+      identityStore.getUser(userId),
       identityStore.getMasterConfig(),
     ]);
 
@@ -48,9 +44,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Get conversation history from Supabase
-    const sessionId = payload.sessionId;
-    const storedHistory = await identityStore.getSessionHistory(sessionId, payload.userId);
+    // Use a session-based ID for conversation history (generate from user ID + date)
+    const sessionId = `${userId}-${new Date().toISOString().split('T')[0]}`;
+    const storedHistory = await identityStore.getSessionHistory(sessionId, userId);
 
     // Build message history for LLM
     const systemPrompt = buildSystemPrompt(masterConfig, user.settings);
@@ -77,7 +73,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Save user message to Supabase
-    await identityStore.addSessionTurn(sessionId, payload.userId, 'user', message);
+    await identityStore.addSessionTurn(sessionId, userId, 'user', message);
 
     // Get brain provider - default to gemini-2.5-flash
     const brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId || 'gemini-2.5-flash';
@@ -101,7 +97,7 @@ export async function POST(request: NextRequest) {
 
     // Check for action blocks in response (e.g., schedule creation)
     let responseText = response.content;
-    const actionResult = await processActionBlocks(response.content, payload.userId, user.settings);
+    const actionResult = await processActionBlocks(response.content, userId, user.settings);
     if (actionResult) {
       responseText = actionResult.cleanedResponse;
       // If action was processed, add confirmation to response
@@ -111,10 +107,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Save assistant response to Supabase
-    await identityStore.addSessionTurn(sessionId, payload.userId, 'assistant', responseText);
+    await identityStore.addSessionTurn(sessionId, userId, 'assistant', responseText);
 
     // Trim old history to keep session manageable (keep last 40 turns)
-    await identityStore.trimSessionHistory(sessionId, payload.userId, 40);
+    await identityStore.trimSessionHistory(sessionId, userId, 40);
 
     // Generate TTS audio
     let audioUrl: string | undefined;
