@@ -11,6 +11,11 @@ interface SessionUser {
   role: string;
   isAdmin: boolean;
   onboardingCompleted: boolean;
+  subscription?: {
+    tier: string;
+    status: string;
+    expiresAt: string;
+  };
 }
 
 function PaywallContent() {
@@ -52,6 +57,32 @@ function PaywallContent() {
 
     checkAuth();
   }, [router]);
+
+  // Check if user has an active subscription
+  const hasActiveSubscription = user?.subscription?.status === 'active';
+  const currentTier = user?.subscription?.tier;
+
+  // Handle continuing with existing subscription
+  const handleContinueToZenna = async () => {
+    setIsLoading(true);
+    try {
+      // Mark onboarding as complete
+      const response = await fetch('/api/subscriptions/activate-trial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (response.ok) {
+        router.push('/chat');
+      } else {
+        // Even if API fails, try to proceed
+        router.push('/chat');
+      }
+    } catch {
+      // Try to proceed anyway
+      router.push('/chat');
+    }
+  };
 
   const handleSelectTier = async (tierId: string) => {
     setError(null);
@@ -141,6 +172,29 @@ function PaywallContent() {
             </p>
           )}
         </div>
+
+        {/* Active Subscription Banner */}
+        {hasActiveSubscription && (
+          <div className="mb-8 p-6 rounded-xl bg-gradient-to-r from-green-500/10 to-emerald-500/10 border border-green-500/20">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="text-center md:text-left">
+                <p className="text-green-400 font-medium text-lg">
+                  You have an active {currentTier} subscription
+                </p>
+                <p className="text-white/50 text-sm mt-1">
+                  Continue using Zenna or manage your subscription below
+                </p>
+              </div>
+              <button
+                onClick={handleContinueToZenna}
+                disabled={isLoading}
+                className="px-8 py-3 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-medium rounded-xl transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {isLoading ? 'Loading...' : 'Continue to Zenna →'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Payment Status Messages */}
         {paymentStatus === 'success' && (
