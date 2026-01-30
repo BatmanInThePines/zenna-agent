@@ -52,6 +52,7 @@ interface DatabaseMasterConfig {
   immutable_rules: string[];
   greeting: string;
   default_avatar_url?: string;
+  avatar_presets?: MasterConfig['avatarPresets'];
   updated_at: string;
 }
 
@@ -286,6 +287,7 @@ export class SupabaseIdentityStore implements IdentityStore {
         immutable_rules: updated.immutableRules,
         greeting: updated.greeting,
         default_avatar_url: updated.defaultAvatarUrl,
+        avatar_presets: updated.avatarPresets,
         updated_at: new Date().toISOString(),
       })
       .select()
@@ -448,6 +450,7 @@ export class SupabaseIdentityStore implements IdentityStore {
       immutableRules: data.immutable_rules,
       greeting: data.greeting,
       defaultAvatarUrl: data.default_avatar_url,
+      avatarPresets: data.avatar_presets,
     };
   }
 

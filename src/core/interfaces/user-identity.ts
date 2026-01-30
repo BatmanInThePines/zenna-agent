@@ -24,8 +24,14 @@ export interface User {
 }
 
 export interface UserSettings {
-  // Personal avatar (PNG)
+  // Personal avatar (2D PNG/image URL or data URL)
   avatarUrl?: string;
+
+  // 3D Avatar model (GLB URL from reconstruction or preset)
+  avatarModelUrl?: string;
+
+  // Avatar model type: how the avatar was created
+  avatarModelType?: 'preset' | 'custom' | 'reconstructed' | '2d-fallback';
 
   // Personal behavior prompt (preferences only, not core behavior)
   personalPrompt?: string;
@@ -132,6 +138,18 @@ export interface MasterConfig {
    * This avatar is used for all users unless they set a personal avatar
    */
   defaultAvatarUrl?: string;
+
+  /**
+   * Default 3D avatar presets available to all users
+   * Father can configure these via admin panel
+   */
+  avatarPresets?: Array<{
+    id: string;
+    name: string;
+    modelUrl: string;        // GLB URL
+    thumbnailUrl?: string;   // Preview image
+    description?: string;
+  }>;
 }
 
 // ============================================

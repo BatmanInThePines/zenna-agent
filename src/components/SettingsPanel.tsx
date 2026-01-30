@@ -39,10 +39,19 @@ interface NotionPage {
   type: string;
 }
 
+interface AvatarPreset {
+  id: string;
+  name: string;
+  modelUrl: string;
+  thumbnailUrl?: string;
+  description?: string;
+}
+
 interface MasterSettings {
   defaultAvatarUrl?: string;
   systemPrompt?: string;
   greeting?: string;
+  avatarPresets?: AvatarPreset[];
 }
 
 type SettingsTab = 'general' | 'llm' | 'integrations' | 'avatar' | 'master';
@@ -128,9 +137,28 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
 
         setSettings(settingsData.settings || {});
         setIsFather(settingsData.isFather || false);
-        setMasterSettings({
-          defaultAvatarUrl: avatarData.avatarUrl || undefined,
-        });
+
+        // Load full master settings if user is Father
+        if (settingsData.isFather) {
+          try {
+            const masterRes = await fetch('/api/settings/master');
+            if (masterRes.ok) {
+              const masterData = await masterRes.json();
+              setMasterSettings({
+                defaultAvatarUrl: masterData.defaultAvatarUrl || avatarData.avatarUrl || undefined,
+                avatarPresets: masterData.avatarPresets || [],
+                systemPrompt: masterData.systemPrompt,
+                greeting: masterData.greeting,
+              });
+            } else {
+              setMasterSettings({ defaultAvatarUrl: avatarData.avatarUrl || undefined });
+            }
+          } catch {
+            setMasterSettings({ defaultAvatarUrl: avatarData.avatarUrl || undefined });
+          }
+        } else {
+          setMasterSettings({ defaultAvatarUrl: avatarData.avatarUrl || undefined });
+        }
 
         // Check if Hue is connected
         if (settingsData.settings?.integrations?.hue?.accessToken) {
@@ -1102,6 +1130,124 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                 <p className="text-xs text-zenna-muted">
                   Supported formats: PNG, JPG, GIF, WebP. Animations are applied programmatically.
                 </p>
+              </div>
+
+              {/* 3D Avatar Presets Management */}
+              <div className="glass-card p-4">
+                <h3 className="text-sm font-medium mb-3 flex items-center">
+                  3D Avatar Presets
+                  <InfoTooltip
+                    title="Avatar Presets"
+                    description="Define the 3D avatar options available to all users. Each preset needs a GLB model URL."
+                    howTo="Upload GLB models to Supabase Storage or use external URLs."
+                  />
+                </h3>
+
+                <p className="text-xs text-zenna-muted mb-4">
+                  Configure the default 3D avatar options that all users can choose from.
+                </p>
+
+                {/* Current presets list */}
+                <div className="space-y-3 mb-4">
+                  {(masterSettings.avatarPresets || []).map((preset, index) => (
+                    <div key={preset.id} className="flex items-center gap-3 p-2 bg-zenna-bg/50 rounded-lg">
+                      <div className="w-12 h-12 rounded-lg overflow-hidden bg-zenna-surface flex-shrink-0">
+                        {preset.thumbnailUrl ? (
+                          <img src={preset.thumbnailUrl} alt={preset.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-zenna-muted text-xs">3D</div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{preset.name}</p>
+                        <p className="text-xs text-zenna-muted truncate">{preset.modelUrl}</p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          const updated = (masterSettings.avatarPresets || []).filter((_, i) => i !== index);
+                          setMasterSettings({ ...masterSettings, avatarPresets: updated });
+                          // Save immediately
+                          fetch('/api/settings/master', {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ avatarPresets: updated }),
+                          });
+                        }}
+                        className="text-red-400 hover:text-red-300 text-xs px-2"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+
+                  {(!masterSettings.avatarPresets || masterSettings.avatarPresets.length === 0) && (
+                    <p className="text-xs text-zenna-muted text-center py-4">
+                      No presets configured. Add presets below.
+                    </p>
+                  )}
+                </div>
+
+                {/* Add new preset form */}
+                <div className="border-t border-zenna-border pt-4">
+                  <p className="text-xs text-zenna-muted mb-2">Add New Preset</p>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      placeholder="Preset name (e.g., 'Zenna Classic')"
+                      className="input-field text-sm"
+                      id="new-preset-name"
+                    />
+                    <input
+                      type="url"
+                      placeholder="GLB model URL"
+                      className="input-field text-sm"
+                      id="new-preset-url"
+                    />
+                    <input
+                      type="url"
+                      placeholder="Thumbnail URL (optional)"
+                      className="input-field text-sm"
+                      id="new-preset-thumb"
+                    />
+                    <button
+                      onClick={() => {
+                        const nameInput = document.getElementById('new-preset-name') as HTMLInputElement;
+                        const urlInput = document.getElementById('new-preset-url') as HTMLInputElement;
+                        const thumbInput = document.getElementById('new-preset-thumb') as HTMLInputElement;
+
+                        if (!nameInput.value || !urlInput.value) {
+                          setMessage({ type: 'error', text: 'Name and Model URL are required' });
+                          return;
+                        }
+
+                        const newPreset: AvatarPreset = {
+                          id: `preset-${Date.now()}`,
+                          name: nameInput.value,
+                          modelUrl: urlInput.value,
+                          thumbnailUrl: thumbInput.value || undefined,
+                        };
+
+                        const updated = [...(masterSettings.avatarPresets || []), newPreset];
+                        setMasterSettings({ ...masterSettings, avatarPresets: updated });
+
+                        // Save immediately
+                        fetch('/api/settings/master', {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ avatarPresets: updated }),
+                        }).then(() => {
+                          setMessage({ type: 'success', text: 'Preset added!' });
+                          nameInput.value = '';
+                          urlInput.value = '';
+                          thumbInput.value = '';
+                        });
+                      }}
+                      className="btn-primary text-sm w-full"
+                    >
+                      Add Preset
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* System Prompt Placeholder */}

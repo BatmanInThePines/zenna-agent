@@ -86,6 +86,14 @@ function ChatPageContent() {
         } else if (avatarData.avatarUrl) {
           setAvatarUrl(avatarData.avatarUrl);
         }
+
+        // Load 3D model settings (persisted from last session)
+        if (settingsData.settings?.avatarModelUrl) {
+          setAvatarModelUrl(settingsData.settings.avatarModelUrl);
+        }
+        if (settingsData.settings?.avatarModelType) {
+          setAvatarModelType(settingsData.settings.avatarModelType);
+        }
       } catch {
         router.push('/login');
       } finally {
@@ -1065,13 +1073,29 @@ function ChatPageContent() {
       {isAvatarSettingsOpen && (
         <AvatarSettings
           onClose={() => setIsAvatarSettingsOpen(false)}
-          onAvatarChange={(url: string, type: 'preset' | 'custom' | 'reconstructed' | '2d-fallback') => {
+          onAvatarChange={async (url: string, type: 'preset' | 'custom' | 'reconstructed' | '2d-fallback') => {
+            // Update local state immediately for responsive UI
             if (type === '2d-fallback') {
               setAvatarUrl(url);
               setAvatarModelType('2d-fallback');
             } else {
               setAvatarModelUrl(url);
               setAvatarModelType(type);
+            }
+
+            // Persist to user settings so it loads on next session
+            try {
+              await fetch('/api/settings', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  avatarModelUrl: type === '2d-fallback' ? undefined : url,
+                  avatarModelType: type,
+                  avatarUrl: type === '2d-fallback' ? url : undefined,
+                }),
+              });
+            } catch (error) {
+              console.error('Failed to persist avatar settings:', error);
             }
           }}
           initialAvatarUrl={avatarUrl}
