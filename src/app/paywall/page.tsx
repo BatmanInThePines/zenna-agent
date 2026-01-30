@@ -1,20 +1,57 @@
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useSession } from 'next-auth/react';
 import { SubscriptionCard, HardwareCheckbox } from '@/components/paywall';
 import { SUBSCRIPTION_TIERS } from '@/lib/stripe/config';
+
+interface SessionUser {
+  id: string;
+  email: string;
+  role: string;
+  isAdmin: boolean;
+  onboardingCompleted: boolean;
+}
 
 function PaywallContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { data: session } = useSession();
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [hardwareBundleSelected, setHardwareBundleSelected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const paymentStatus = searchParams.get('payment');
+
+  // Check authentication on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const response = await fetch('/api/auth/session');
+        const data = await response.json();
+
+        if (!data.authenticated) {
+          router.push('/login');
+          return;
+        }
+
+        // If already onboarded, redirect to chat
+        if (data.user?.onboardingCompleted) {
+          router.push('/chat');
+          return;
+        }
+
+        setUser(data.user);
+      } catch {
+        router.push('/login');
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    checkAuth();
+  }, [router]);
 
   const handleSelectTier = async (tierId: string) => {
     setError(null);
@@ -69,6 +106,17 @@ function PaywallContent() {
     }
   };
 
+  if (isCheckingAuth) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0a0a0f] via-[#0f0f18] to-[#0a0a0f]">
+        <div className="text-center">
+          <div className="w-12 h-12 border-2 border-white/30 border-t-white rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-white/50">Loading subscription options...</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-[#0a0a0f] via-[#0f0f18] to-[#0a0a0f] py-12 px-4">
       {/* Animated Background */}
@@ -87,9 +135,9 @@ function PaywallContent() {
           <p className="text-xl text-white/60 mb-2">
             Choose your experience
           </p>
-          {session?.user?.email && (
+          {user?.email && (
             <p className="text-sm text-white/40">
-              Signed in as {session.user.email}
+              Signed in as {user.email}
             </p>
           )}
         </div>
