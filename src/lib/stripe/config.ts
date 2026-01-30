@@ -78,9 +78,9 @@ export const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
   {
     id: 'standard',
     name: 'Standard Package',
-    price: '$49', // Placeholder - update with actual price
-    priceAmount: 4900,
-    priceType: 'one-time',
+    price: '$9.99/mo',
+    priceAmount: 999,
+    priceType: 'monthly',
     features: [
       'All Free Trial features',
       'Philips Hue Lights integration',
@@ -97,9 +97,9 @@ export const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
   {
     id: 'pro',
     name: 'Pro',
-    price: '$149', // Placeholder - update with actual price
-    priceAmount: 14900,
-    priceType: 'one-time',
+    price: '$29.99/mo',
+    priceAmount: 2999,
+    priceType: 'monthly',
     features: [
       'All Standard features',
       'Local Zenna: Privacy-first local processing',
@@ -114,8 +114,8 @@ export const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
   {
     id: 'platinum',
     name: 'Platinum',
-    price: '$29/mo', // Placeholder - update with actual price
-    priceAmount: 2900,
+    price: '$89.99/mo',
+    priceAmount: 8999,
     priceType: 'monthly',
     features: [
       'All Pro features',

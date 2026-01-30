@@ -67,21 +67,15 @@ function PaywallContent() {
     setIsLoading(true);
     try {
       // Mark onboarding as complete
-      const response = await fetch('/api/subscriptions/activate-trial', {
+      await fetch('/api/subscriptions/activate-trial', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
-
-      if (response.ok) {
-        router.push('/chat');
-      } else {
-        // Even if API fails, try to proceed
-        router.push('/chat');
-      }
     } catch {
-      // Try to proceed anyway
-      router.push('/chat');
+      // Ignore errors - we'll proceed anyway
     }
+    // Always redirect with welcome param to bypass stale JWT check
+    router.push('/chat?welcome=true');
   };
 
   const handleSelectTier = async (tierId: string) => {

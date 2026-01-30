@@ -69,8 +69,13 @@ function ChatPageContent() {
           return;
         }
 
+        // Check if coming from paywall (with welcome param) or has active subscription
+        const isFromPaywall = searchParams.get('welcome') === 'true';
+        const hasActiveSubscription = data.user?.subscription?.status === 'active';
+
         // Redirect to paywall if user hasn't completed onboarding
-        if (!data.user?.onboardingCompleted) {
+        // BUT skip if coming from paywall with welcome param or has active subscription
+        if (!data.user?.onboardingCompleted && !isFromPaywall && !hasActiveSubscription) {
           router.push('/paywall');
           return;
         }
