@@ -4,7 +4,20 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(tree:*)",
+      "Bash(xargs:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(gh pr create --title \"Add Phase 2: OAuth, Subscriptions, Admin Dashboard\" --body \"$\\(cat <<''EOF''\n## Summary\n- Add NextAuth.js v5 OAuth authentication \\(Google, Apple, GitHub providers\\)\n- Add Stripe subscription integration with 4 tiers \\(Trial, Standard, Pro, Platinum\\)\n- Add admin user management dashboard with role change, suspend, archive, export\n- Add subscription paywall page with tier selection UI\n- Add trial status tracking with warning banner \\(Day 80 warning, Day 91 block\\)\n- Add TTS onboarding welcome narrative\n- Replace landing page with sign-in/sign-up form and Greeting.mp3 audio\n- Fix module-level initialization for Vercel build compatibility\n- Add Phase 2 database migration script\n\n## Test plan\n- [ ] Verify landing page shows auth form and plays greeting audio\n- [ ] Test OAuth sign-in flows \\(credentials work, OAuth needs provider setup\\)\n- [ ] Verify authenticated users redirect to /chat\n- [ ] Check paywall page displays subscription tiers\n- [ ] Test admin dashboard routes respond correctly\n- [ ] Run database migration in Supabase\n- [ ] Configure Stripe webhook endpoint\n- [ ] Set up OAuth credentials in Vercel environment\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\nEOF\n\\)\")",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)",
+      "Bash(git stash:*)",
+      "Bash(git config:*)",
+      "Bash(git checkout:*)",
+      "Bash(timeout:*)",
+      "Bash(npx vercel:*)",
+      "Bash(git pull:*)"
     ]
   }
 }
