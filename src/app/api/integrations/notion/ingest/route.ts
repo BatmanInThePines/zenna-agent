@@ -7,11 +7,13 @@ import {
   GeminiEmbeddingProvider,
 } from '@/core/providers/memory/pinecone-store';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 // In-memory progress tracking (in production, use Redis or database)
 const ingestionProgress = new Map<string, {
@@ -32,6 +34,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -106,6 +109,7 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -223,6 +227,7 @@ async function updateProgress(
 
   // Update user settings (persist status)
   try {
+    const identityStore = getIdentityStore();
     const user = await identityStore.getUser(userId);
     if (user) {
       await identityStore.updateSettings(userId, {

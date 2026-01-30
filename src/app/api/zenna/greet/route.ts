@@ -3,13 +3,16 @@ import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import { ElevenLabsTTSProvider } from '@/core/providers/voice/elevenlabs-tts';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 export async function POST() {
+  const identityStore = getIdentityStore();
   try {
     // Verify authentication
     const cookieStore = await cookies();

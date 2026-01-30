@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 // Maximum avatar size: 2MB
 const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
@@ -21,6 +23,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -91,6 +94,7 @@ export async function POST(request: NextRequest) {
 // Get master avatar URL
 export async function GET() {
   try {
+    const identityStore = getIdentityStore();
     const masterConfig = await identityStore.getMasterConfig();
 
     return NextResponse.json({
@@ -112,6 +116,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

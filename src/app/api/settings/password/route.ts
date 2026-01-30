@@ -3,11 +3,13 @@ import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import bcrypt from 'bcryptjs';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,6 +20,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

@@ -2,22 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
-
-// Philips Hue OAuth Configuration
-// Register your app at https://developers.meethue.com/
-const HUE_CLIENT_ID = process.env.HUE_CLIENT_ID;
-const HUE_CLIENT_SECRET = process.env.HUE_CLIENT_SECRET;
-const HUE_APP_ID = process.env.HUE_APP_ID || 'zenna';
-const HUE_REDIRECT_URI = `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/hue/callback`;
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 // Step 1: Initiate OAuth - returns the authorization URL
 export async function GET() {
   try {
+    const HUE_CLIENT_ID = process.env.HUE_CLIENT_ID;
+
     const cookieStore = await cookies();
     const token = cookieStore.get('zenna-session')?.value;
 
@@ -25,6 +22,7 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -65,6 +63,9 @@ export async function GET() {
 // Step 2: Check connection status
 export async function POST(request: NextRequest) {
   try {
+    const HUE_CLIENT_ID = process.env.HUE_CLIENT_ID;
+    const HUE_CLIENT_SECRET = process.env.HUE_CLIENT_SECRET;
+
     const cookieStore = await cookies();
     const token = cookieStore.get('zenna-session')?.value;
 
@@ -72,6 +73,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -105,7 +107,7 @@ export async function POST(request: NextRequest) {
 
       // Token expired - try to refresh
       if (response.status === 401 && hueConfig.refreshToken) {
-        const refreshed = await refreshHueToken(payload.userId, hueConfig.refreshToken);
+        const refreshed = await refreshHueToken(payload.userId, hueConfig.refreshToken, HUE_CLIENT_ID, HUE_CLIENT_SECRET);
         if (refreshed) {
           return NextResponse.json({
             connected: true,
@@ -134,8 +136,13 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function refreshHueToken(userId: string, refreshToken: string): Promise<boolean> {
-  if (!HUE_CLIENT_ID || !HUE_CLIENT_SECRET) {
+async function refreshHueToken(
+  userId: string,
+  refreshToken: string,
+  clientId: string | undefined,
+  clientSecret: string | undefined
+): Promise<boolean> {
+  if (!clientId || !clientSecret) {
     return false;
   }
 
@@ -144,7 +151,7 @@ async function refreshHueToken(userId: string, refreshToken: string): Promise<bo
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${Buffer.from(`${HUE_CLIENT_ID}:${HUE_CLIENT_SECRET}`).toString('base64')}`,
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
       },
       body: new URLSearchParams({
         grant_type: 'refresh_token',
@@ -159,6 +166,7 @@ async function refreshHueToken(userId: string, refreshToken: string): Promise<bo
     const tokens = await response.json();
 
     // Update stored tokens
+    const identityStore = getIdentityStore();
     await identityStore.updateSettings(userId, {
       integrations: {
         hue: {

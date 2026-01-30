@@ -5,11 +5,13 @@ import { brainProviderFactory } from '@/core/providers/brain';
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 /**
  * Streaming Chat API Endpoint
@@ -22,6 +24,8 @@ const identityStore = new SupabaseIdentityStore({
  * This enables real-time transcript updates before TTS audio is ready.
  */
 export async function POST(request: NextRequest) {
+  const identityStore = getIdentityStore();
+
   try {
     // Verify authentication
     const cookieStore = await cookies();
@@ -324,7 +328,7 @@ function analyzeEmotion(text: string): EmotionType {
 }
 
 function buildSystemPrompt(
-  masterConfig: Awaited<ReturnType<typeof identityStore.getMasterConfig>>,
+  masterConfig: Awaited<ReturnType<SupabaseIdentityStore['getMasterConfig']>>,
   userSettings: UserSettings
 ): string {
   let prompt = masterConfig.systemPrompt;

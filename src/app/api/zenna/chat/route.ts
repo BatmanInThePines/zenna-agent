@@ -8,13 +8,16 @@ import { INTEGRATION_MANIFESTS, getIntegrationContextSummary } from '@/core/inte
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 export async function POST(request: NextRequest) {
+  const identityStore = getIdentityStore();
   try {
     // Verify authentication
     const cookieStore = await cookies();
@@ -470,7 +473,7 @@ function analyzeEmotion(text: string): EmotionType {
 }
 
 function buildSystemPrompt(
-  masterConfig: Awaited<ReturnType<typeof identityStore.getMasterConfig>>,
+  masterConfig: Awaited<ReturnType<SupabaseIdentityStore['getMasterConfig']>>,
   userSettings: UserSettings
 ): string {
   let prompt = masterConfig.systemPrompt;

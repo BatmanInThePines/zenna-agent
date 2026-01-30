@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
-
-const NOTION_CLIENT_ID = process.env.NOTION_CLIENT_ID;
-const NOTION_CLIENT_SECRET = process.env.NOTION_CLIENT_SECRET;
-const NOTION_REDIRECT_URI = `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/notion/callback`;
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 // OAuth callback - exchanges authorization code for access token
 export async function GET(request: NextRequest) {
   try {
+    const NOTION_CLIENT_ID = process.env.NOTION_CLIENT_ID;
+    const NOTION_CLIENT_SECRET = process.env.NOTION_CLIENT_SECRET;
+    const NOTION_REDIRECT_URI = `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/notion/callback`;
+
     const searchParams = request.nextUrl.searchParams;
     const code = searchParams.get('code');
     const state = searchParams.get('state');
@@ -82,6 +84,7 @@ export async function GET(request: NextRequest) {
     const tokenData = await tokenResponse.json();
 
     // Get current user settings to preserve existing external context
+    const identityStore = getIdentityStore();
     const user = await identityStore.getUser(userId);
     const existingExternalContext = user?.settings.externalContext || {};
 

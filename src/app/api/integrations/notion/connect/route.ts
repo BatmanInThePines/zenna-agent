@@ -2,21 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
-
-// Notion OAuth Configuration
-// Register your integration at https://www.notion.so/my-integrations
-const NOTION_CLIENT_ID = process.env.NOTION_CLIENT_ID;
-const NOTION_CLIENT_SECRET = process.env.NOTION_CLIENT_SECRET;
-const NOTION_REDIRECT_URI = `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/notion/callback`;
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 // Step 1: Initiate OAuth - returns the authorization URL
 export async function GET() {
   try {
+    const NOTION_CLIENT_ID = process.env.NOTION_CLIENT_ID;
+    const NOTION_REDIRECT_URI = `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/notion/callback`;
+
     const cookieStore = await cookies();
     const token = cookieStore.get('zenna-session')?.value;
 
@@ -24,6 +23,7 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

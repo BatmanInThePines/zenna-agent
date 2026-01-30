@@ -3,16 +3,20 @@ import { cookies } from 'next/headers';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import { RoutineStore } from '@/core/providers/routines/routine-store';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
-const routineStore = new RoutineStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-});
+function getRoutineStore() {
+  return new RoutineStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  });
+}
 
 /**
  * PATCH /api/routines/[id] - Update a routine
@@ -29,6 +33,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -45,6 +50,7 @@ export async function PATCH(
     if (body.parameters !== undefined) allowedUpdates.parameters = body.parameters;
     if (body.enabled !== undefined) allowedUpdates.enabled = body.enabled;
 
+    const routineStore = getRoutineStore();
     const routine = await routineStore.updateRoutine(id, allowedUpdates);
 
     if (!routine) {
@@ -73,6 +79,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -80,6 +87,7 @@ export async function DELETE(
 
     const { id } = await params;
 
+    const routineStore = getRoutineStore();
     await routineStore.deleteRoutine(id);
 
     return NextResponse.json({ success: true });

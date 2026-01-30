@@ -1,18 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
-
-const HUE_CLIENT_ID = process.env.HUE_CLIENT_ID;
-const HUE_CLIENT_SECRET = process.env.HUE_CLIENT_SECRET;
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 // OAuth callback - exchanges authorization code for access token
 export async function GET(request: NextRequest) {
   try {
+    const HUE_CLIENT_ID = process.env.HUE_CLIENT_ID;
+    const HUE_CLIENT_SECRET = process.env.HUE_CLIENT_SECRET;
+
     const searchParams = request.nextUrl.searchParams;
     const code = searchParams.get('code');
     const state = searchParams.get('state');
@@ -113,6 +115,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Store tokens and username in user settings
+    const identityStore = getIdentityStore();
     await identityStore.updateSettings(userId, {
       integrations: {
         hue: {

@@ -4,16 +4,20 @@ import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identi
 import { RoutineStore } from '@/core/providers/routines/routine-store';
 import { ScheduledRoutine } from '@/core/interfaces/integration-manifest';
 
-const identityStore = new SupabaseIdentityStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  jwtSecret: process.env.AUTH_SECRET!,
-});
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
-const routineStore = new RoutineStore({
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-});
+function getRoutineStore() {
+  return new RoutineStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  });
+}
 
 /**
  * GET /api/routines - List all routines for the current user
@@ -27,11 +31,13 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const routineStore = getRoutineStore();
     const routines = await routineStore.getRoutinesForUser(payload.userId);
 
     return NextResponse.json({ routines });
@@ -53,6 +59,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const identityStore = getIdentityStore();
     const payload = await identityStore.verifyToken(token);
     if (!payload) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -77,6 +84,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const routineStore = getRoutineStore();
     const routine = await routineStore.createRoutine({
       userId: payload.userId,
       integrationId,
