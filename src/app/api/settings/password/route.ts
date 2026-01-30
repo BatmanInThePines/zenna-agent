@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import bcrypt from 'bcryptjs';
 
@@ -13,18 +13,14 @@ function getIdentityStore() {
 
 export async function POST(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     const { currentPassword, newPassword } = await request.json();
 
@@ -43,7 +39,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify current password by attempting authentication
-    const user = await identityStore.getUser(payload.userId);
+    const user = await identityStore.getUser(userId);
     if (!user) {
       return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 });
     }
@@ -57,7 +53,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Change password
-    await identityStore.changePassword(payload.userId, newPassword);
+    await identityStore.changePassword(userId, newPassword);
 
     return NextResponse.json({ success: true });
   } catch (error) {

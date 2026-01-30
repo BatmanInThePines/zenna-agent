@@ -17,7 +17,7 @@
 export interface User {
   id: string;
   username: string;
-  role: 'user' | 'father'; // 'father' = admin/master
+  role: 'user' | 'father' | 'admin' | 'admin-support'; // 'father' = legacy admin, 'admin' = new admin
   createdAt: Date;
   lastLoginAt?: Date;
   settings: UserSettings;
@@ -145,7 +145,7 @@ export interface IdentityStore {
   createUser(
     username: string,
     password: string,
-    role?: 'user' | 'father'
+    role?: 'user' | 'father' | 'admin' | 'admin-support'
   ): Promise<User>;
 
   /**
@@ -219,7 +219,7 @@ export interface IdentityStore {
 export interface AuthToken {
   userId: string;
   sessionId: string;
-  role: 'user' | 'father';
+  role: 'user' | 'father' | 'admin' | 'admin-support';
   exp: number;
   iat: number;
 }

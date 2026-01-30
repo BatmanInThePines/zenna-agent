@@ -1,16 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
+import { auth } from '@/lib/auth';
 import { RoutineStore } from '@/core/providers/routines/routine-store';
 import { ScheduledRoutine } from '@/core/interfaces/integration-manifest';
-
-function getIdentityStore() {
-  return new SupabaseIdentityStore({
-    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    jwtSecret: process.env.AUTH_SECRET!,
-  });
-}
 
 function getRoutineStore() {
   return new RoutineStore({
@@ -24,21 +15,16 @@ function getRoutineStore() {
  */
 export async function GET() {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = session.user.id;
 
     const routineStore = getRoutineStore();
-    const routines = await routineStore.getRoutinesForUser(payload.userId);
+    const routines = await routineStore.getRoutinesForUser(userId);
 
     return NextResponse.json({ routines });
   } catch (error) {
@@ -52,18 +38,13 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = session.user.id;
 
     const body = await request.json();
     const { integrationId, actionId, name, description, schedule, parameters } = body;
@@ -86,7 +67,7 @@ export async function POST(request: NextRequest) {
 
     const routineStore = getRoutineStore();
     const routine = await routineStore.createRoutine({
-      userId: payload.userId,
+      userId: userId,
       integrationId,
       actionId,
       name,

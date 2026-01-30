@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
 function getIdentityStore() {
@@ -16,18 +16,13 @@ export async function GET() {
     const NOTION_CLIENT_ID = process.env.NOTION_CLIENT_ID;
     const NOTION_REDIRECT_URI = `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/notion/callback`;
 
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = session.user.id;
 
     if (!NOTION_CLIENT_ID) {
       return NextResponse.json(
@@ -38,7 +33,7 @@ export async function GET() {
 
     // Generate state for CSRF protection (store userId in state)
     const state = Buffer.from(JSON.stringify({
-      userId: payload.userId,
+      userId: userId,
       timestamp: Date.now(),
     })).toString('base64');
 
@@ -66,21 +61,17 @@ export async function GET() {
 // Step 2: Check connection status and get available pages
 export async function POST(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     // Get user's Notion credentials
-    const user = await identityStore.getUser(payload.userId);
+    const user = await identityStore.getUser(userId);
     const notionConfig = user?.settings.externalContext?.notion;
 
     if (!notionConfig?.token) {

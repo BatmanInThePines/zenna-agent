@@ -7,8 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import * as jose from 'jose';
+import { auth } from '@/lib/auth';
 import { uploadImage } from '@/lib/avatar/supabase-reconstruction-store';
 
 // Allow up to 60s on Vercel Pro (default is 10s on Hobby)
@@ -17,28 +16,6 @@ export const maxDuration = 60;
 // =============================================================================
 // HELPERS
 // =============================================================================
-
-async function getCurrentUser(): Promise<{ id: string; username: string } | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get('zenna-session')?.value;
-
-  if (!token) return null;
-
-  try {
-    const secret = new TextEncoder().encode(
-      process.env.AUTH_SECRET || 'zenna-default-secret-change-me'
-    );
-    const { payload } = await jose.jwtVerify(token, secret);
-    const userId = (payload.userId as string) || (payload.sub as string);
-    if (!userId) return null;
-    return {
-      id: userId,
-      username: (payload.username as string) || userId,
-    };
-  } catch {
-    return null;
-  }
-}
 
 function validateImage(
   buffer: Buffer,
@@ -80,12 +57,13 @@ export async function POST(request: NextRequest) {
   try {
     console.log('[avatar/upload] Starting image upload...');
 
-    const user = await getCurrentUser();
-    if (!user) {
+    const session = await auth();
+    if (!session?.user?.id) {
       console.log('[avatar/upload] Unauthorized - no valid session');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    console.log('[avatar/upload] User authenticated:', user.id);
+    const userId = session.user.id;
+    console.log('[avatar/upload] User authenticated:', userId);
 
     const formData = await request.formData();
     const image = formData.get('image') as File | null;
@@ -110,7 +88,7 @@ export async function POST(request: NextRequest) {
 
     const ext = image.name.split('.').pop() || 'png';
     const filename = `${angle}_${Date.now()}.${ext}`;
-    const tempJobId = `upload-${user.id}-${Date.now()}`;
+    const tempJobId = `upload-${userId}-${Date.now()}`;
 
     console.log(`[avatar/upload] Uploading to Supabase: ${tempJobId}/${filename}`);
     const url = await uploadImage(buffer, filename, tempJobId, validation.contentType);

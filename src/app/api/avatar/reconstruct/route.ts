@@ -15,8 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import * as jose from 'jose';
+import { auth } from '@/lib/auth';
 
 // Allow up to 60s on Vercel Pro (default is 10s on Hobby)
 export const maxDuration = 60;
@@ -56,31 +55,6 @@ const USE_SYNC_MODE = process.env.REPLICATE_SYNC_MODE === 'true';
 // =============================================================================
 // HELPERS
 // =============================================================================
-
-/**
- * Get current user from session token.
- */
-async function getCurrentUser(): Promise<{ id: string; username: string } | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get('zenna-session')?.value;
-
-  if (!token) return null;
-
-  try {
-    const secret = new TextEncoder().encode(
-      process.env.AUTH_SECRET || 'zenna-default-secret-change-me'
-    );
-    const { payload } = await jose.jwtVerify(token, secret);
-    const userId = (payload.userId as string) || (payload.sub as string);
-    if (!userId) return null;
-    return {
-      id: userId,
-      username: (payload.username as string) || userId,
-    };
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Validate uploaded image.
@@ -127,10 +101,11 @@ function validateImage(
 export async function POST(request: NextRequest) {
   try {
     // Authenticate user
-    const user = await getCurrentUser();
-    if (!user) {
+    const session = await auth();
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const user = { id: session.user.id, username: session.user.email?.split('@')[0] || 'user' };
 
     // Check Replicate API token is configured
     if (!process.env.REPLICATE_API_TOKEN) {
@@ -274,10 +249,11 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   try {
     // Authenticate user
-    const user = await getCurrentUser();
-    if (!user) {
+    const session = await auth();
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const user = { id: session.user.id };
 
     // Get user's jobs from database
     const jobs = await getJobsForUser(user.id);

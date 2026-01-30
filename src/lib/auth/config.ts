@@ -167,9 +167,11 @@ export const authConfig: NextAuthConfig = {
       }
     },
 
-    async jwt({ token, user, account, trigger }) {
+    async jwt({ token, user, trigger }) {
+      const supabase = getSupabaseClient();
+
+      // On initial sign-in, set up the token from user data
       if (trigger === 'signIn' && user?.email) {
-        const supabase = getSupabaseClient();
         // Fetch full user data from database
         const { data: dbUser } = await supabase
           .from('users')
@@ -186,6 +188,37 @@ export const authConfig: NextAuthConfig = {
           token.onboardingCompleted = dbUser.onboarding_completed;
 
           // Get subscription status
+          const { data: subscription } = await supabase
+            .from('subscriptions')
+            .select('tier, status, expires_at')
+            .eq('user_id', dbUser.id)
+            .eq('status', 'active')
+            .single();
+
+          if (subscription) {
+            token.subscription = {
+              tier: subscription.tier,
+              status: subscription.status,
+              expiresAt: subscription.expires_at,
+            };
+          }
+        }
+      } else if (token.userId) {
+        // On subsequent requests, refresh key data from database
+        // This ensures role changes and subscription updates are reflected
+        const { data: dbUser } = await supabase
+          .from('users')
+          .select('id, email, role, onboarding_completed')
+          .eq('id', token.userId)
+          .single();
+
+        if (dbUser) {
+          token.role = dbUser.role;
+          token.isAdmin = dbUser.role === 'admin' || dbUser.email === ADMIN_EMAIL;
+          token.isFather = dbUser.email === ADMIN_EMAIL;
+          token.onboardingCompleted = dbUser.onboarding_completed;
+
+          // Refresh subscription status
           const { data: subscription } = await supabase
             .from('subscriptions')
             .select('tier, status, expires_at')

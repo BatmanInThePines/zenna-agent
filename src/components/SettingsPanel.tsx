@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { UserManagementDashboard } from './admin/UserManagementDashboard';
 
 interface SettingsPanelProps {
   onClose: () => void;
-  initialTab?: 'general' | 'llm' | 'integrations' | 'avatar' | 'master';
+  initialTab?: 'general' | 'llm' | 'integrations' | 'avatar' | 'master' | 'users';
   onOpenAvatarSettings?: () => void;
 }
 
@@ -45,7 +46,7 @@ interface MasterSettings {
   greeting?: string;
 }
 
-type SettingsTab = 'general' | 'llm' | 'integrations' | 'avatar' | 'master';
+type SettingsTab = 'general' | 'llm' | 'integrations' | 'avatar' | 'master' | 'users';
 
 interface InfoTooltipProps {
   title: string;
@@ -90,6 +91,7 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
   const [settings, setSettings] = useState<UserSettings>({});
   const [masterSettings, setMasterSettings] = useState<MasterSettings>({});
   const [isFather, setIsFather] = useState(false);
+  const [userEmail, setUserEmail] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -128,6 +130,7 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
 
         setSettings(settingsData.settings || {});
         setIsFather(settingsData.isFather || false);
+        setUserEmail(settingsData.email || '');
         setMasterSettings({
           defaultAvatarUrl: avatarData.avatarUrl || undefined,
         });
@@ -468,7 +471,10 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
     { id: 'llm', label: 'LLM' },
     { id: 'integrations', label: 'Integrations' },
     { id: 'avatar', label: 'Avatar' },
-    ...(isFather ? [{ id: 'master' as const, label: 'Master' }] : []),
+    ...(isFather ? [
+      { id: 'master' as const, label: 'Master' },
+      { id: 'users' as const, label: 'Users' },
+    ] : []),
   ];
 
   if (isLoading) {
@@ -483,7 +489,9 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="glass-card w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div className={`glass-card w-full max-h-[90vh] overflow-hidden flex flex-col ${
+        activeTab === 'users' ? 'max-w-6xl' : 'max-w-2xl'
+      }`}>
         {/* Header */}
         <div className="p-4 border-b border-zenna-border flex items-center justify-between">
           <h2 className="text-lg font-medium">Settings</h2>
@@ -1120,13 +1128,26 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                 </p>
               </div>
 
-              {/* User Management Placeholder */}
+              {/* User Management Link */}
               <div className="glass-card p-4">
                 <h3 className="text-sm font-medium mb-3">User Management</h3>
-                <p className="text-xs text-zenna-muted">
+                <p className="text-xs text-zenna-muted mb-3">
                   Add, remove, and manage user accounts.
                 </p>
+                <button
+                  onClick={() => setActiveTab('users')}
+                  className="btn-secondary text-sm"
+                >
+                  Open User Management →
+                </button>
               </div>
+            </div>
+          )}
+
+          {/* Users Tab (Father only) */}
+          {activeTab === 'users' && isFather && (
+            <div className="space-y-6">
+              <UserManagementDashboard currentUserEmail={userEmail} />
             </div>
           )}
         </div>
