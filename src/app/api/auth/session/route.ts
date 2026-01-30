@@ -1,51 +1,25 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
-
-function getIdentityStore() {
-  return new SupabaseIdentityStore({
-    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    jwtSecret: process.env.AUTH_SECRET!,
-  });
-}
+import { auth } from '@/lib/auth';
 
 export async function GET() {
   try {
-    const identityStore = getIdentityStore();
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
-      return NextResponse.json({ authenticated: false });
-    }
-
-    const payload = await identityStore.verifyToken(token);
-
-    if (!payload) {
-      return NextResponse.json({ authenticated: false });
-    }
-
-    // Verify session is still valid
-    const session = await identityStore.validateSession(payload.sessionId);
-
-    if (!session) {
-      return NextResponse.json({ authenticated: false });
-    }
-
-    // Get user details
-    const user = await identityStore.getUser(payload.userId);
-
-    if (!user) {
+    if (!session?.user) {
       return NextResponse.json({ authenticated: false });
     }
 
     return NextResponse.json({
       authenticated: true,
       user: {
-        id: user.id,
-        username: user.username,
-        role: user.role,
+        id: session.user.id,
+        username: session.user.email?.split('@')[0] || 'user',
+        email: session.user.email,
+        role: session.user.role || 'user',
+        isAdmin: session.user.isAdmin || false,
+        isFather: session.user.isFather || false,
+        onboardingCompleted: session.user.onboardingCompleted || false,
+        subscription: session.user.subscription,
       },
     });
   } catch (error) {
