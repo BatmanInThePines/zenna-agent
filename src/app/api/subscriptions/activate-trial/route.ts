@@ -40,10 +40,21 @@ export async function POST() {
       .single();
 
     if (existingSubscription) {
-      return NextResponse.json(
-        { error: 'You already have an active subscription' },
-        { status: 400 }
-      );
+      // User already has a subscription - just mark onboarding as complete
+      await supabase
+        .from('users')
+        .update({ onboarding_completed: true })
+        .eq('id', userId);
+
+      return NextResponse.json({
+        success: true,
+        message: 'Onboarding marked complete',
+        subscription: {
+          id: existingSubscription.id,
+          tier: existingSubscription.tier,
+          status: existingSubscription.status,
+        },
+      });
     }
 
     // Calculate trial end date (90 days from now)
@@ -70,6 +81,12 @@ export async function POST() {
         { status: 500 }
       );
     }
+
+    // Mark onboarding as complete
+    await supabase
+      .from('users')
+      .update({ onboarding_completed: true })
+      .eq('id', userId);
 
     // Initialize user session tracking
     await supabase
