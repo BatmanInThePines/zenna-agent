@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import {
   PineconeLongTermStore,
@@ -27,18 +27,14 @@ const ingestionProgress = new Map<string, {
 // Start ingestion process
 export async function POST(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     const { pageIds } = await request.json();
 
@@ -47,7 +43,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user's Notion credentials
-    const user = await identityStore.getUser(payload.userId);
+    const user = await identityStore.getUser(userId);
     const notionConfig = user?.settings.externalContext?.notion;
 
     if (!notionConfig?.token) {
@@ -55,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if already processing
-    const existingProgress = ingestionProgress.get(payload.userId);
+    const existingProgress = ingestionProgress.get(userId);
     if (existingProgress?.status === 'processing') {
       return NextResponse.json({
         message: 'Ingestion already in progress',
@@ -64,7 +60,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Initialize progress
-    ingestionProgress.set(payload.userId, {
+    ingestionProgress.set(userId, {
       status: 'processing',
       progress: 0,
       totalPages: pageIds.length,
@@ -72,7 +68,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Update user settings to show processing status
-    await identityStore.updateSettings(payload.userId, {
+    await identityStore.updateSettings(userId, {
       externalContext: {
         ...user?.settings.externalContext,
         notion: {
@@ -84,7 +80,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Start background processing (non-blocking)
-    processNotionPages(payload.userId, pageIds, notionConfig.token).catch(console.error);
+    processNotionPages(userId, pageIds, notionConfig.token).catch(console.error);
 
     return NextResponse.json({
       message: 'Ingestion started',
@@ -102,24 +98,20 @@ export async function POST(request: NextRequest) {
 // Get ingestion progress
 export async function GET() {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
-    const progress = ingestionProgress.get(payload.userId);
+    const progress = ingestionProgress.get(userId);
 
     if (!progress) {
       // Check user settings for persisted status
-      const user = await identityStore.getUser(payload.userId);
+      const user = await identityStore.getUser(userId);
       const notionConfig = user?.settings.externalContext?.notion;
 
       return NextResponse.json({

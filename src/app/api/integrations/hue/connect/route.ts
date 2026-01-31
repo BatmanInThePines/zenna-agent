@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
 function getIdentityStore() {
@@ -15,18 +15,11 @@ export async function GET() {
   try {
     const HUE_CLIENT_ID = process.env.HUE_CLIENT_ID;
 
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
-
-    if (!token) {
+    const session = await auth();
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-
-    const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = session.user.id;
 
     if (!HUE_CLIENT_ID) {
       return NextResponse.json(
@@ -37,7 +30,7 @@ export async function GET() {
 
     // Generate state for CSRF protection (store userId in state)
     const state = Buffer.from(JSON.stringify({
-      userId: payload.userId,
+      userId,
       timestamp: Date.now(),
     })).toString('base64');
 
@@ -61,26 +54,21 @@ export async function GET() {
 }
 
 // Step 2: Check connection status
-export async function POST(request: NextRequest) {
+export async function POST() {
   try {
     const HUE_CLIENT_ID = process.env.HUE_CLIENT_ID;
     const HUE_CLIENT_SECRET = process.env.HUE_CLIENT_SECRET;
 
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
-
-    if (!token) {
+    const session = await auth();
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user.id;
 
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     // Get user's Hue credentials
-    const user = await identityStore.getUser(payload.userId);
+    const user = await identityStore.getUser(userId);
     const hueConfig = user?.settings.integrations?.hue;
 
     if (!hueConfig?.accessToken) {
@@ -107,7 +95,7 @@ export async function POST(request: NextRequest) {
 
       // Token expired - try to refresh
       if (response.status === 401 && hueConfig.refreshToken) {
-        const refreshed = await refreshHueToken(payload.userId, hueConfig.refreshToken, HUE_CLIENT_ID, HUE_CLIENT_SECRET);
+        const refreshed = await refreshHueToken(userId, hueConfig.refreshToken, HUE_CLIENT_ID, HUE_CLIENT_SECRET);
         if (refreshed) {
           return NextResponse.json({
             connected: true,

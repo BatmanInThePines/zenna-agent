@@ -6,42 +6,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import * as jose from 'jose';
+import { auth } from '@/lib/auth';
 import { getJobForUser } from '@/lib/avatar/supabase-reconstruction-store';
 import { checkAndProcessPrediction } from '@/lib/avatar/replicate-reconstruction';
 
 // Allow up to 60s on Vercel Pro (polling fallback may need to download + process GLB)
 export const maxDuration = 60;
-
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-/**
- * Get current user from session token.
- */
-async function getCurrentUser(): Promise<{ id: string; username: string } | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get('zenna-session')?.value;
-
-  if (!token) return null;
-
-  try {
-    const secret = new TextEncoder().encode(
-      process.env.AUTH_SECRET || 'zenna-default-secret-change-me'
-    );
-    const { payload } = await jose.jwtVerify(token, secret);
-    const userId = (payload.userId as string) || (payload.sub as string);
-    if (!userId) return null;
-    return {
-      id: userId,
-      username: (payload.username as string) || userId,
-    };
-  } catch {
-    return null;
-  }
-}
 
 // =============================================================================
 // GET /api/avatar/reconstruct/status?jobId=xxx
@@ -51,10 +21,11 @@ async function getCurrentUser(): Promise<{ id: string; username: string } | null
 export async function GET(request: NextRequest) {
   try {
     // Authenticate user
-    const user = await getCurrentUser();
-    if (!user) {
+    const session = await auth();
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user.id;
 
     // Get job ID from query params
     const { searchParams } = new URL(request.url);
@@ -65,7 +36,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get job from Supabase (verifies ownership)
-    let job = await getJobForUser(jobId, user.id);
+    let job = await getJobForUser(jobId, userId);
 
     if (!job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
@@ -87,7 +58,7 @@ export async function GET(request: NextRequest) {
         const result = await checkAndProcessPrediction(jobId, job.replicate_prediction_id);
         if (result.processed) {
           // Re-fetch updated job
-          job = (await getJobForUser(jobId, user.id))!;
+          job = (await getJobForUser(jobId, userId))!;
         }
       }
     }

@@ -1,15 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
+import { auth } from '@/lib/auth';
 import { RoutineStore } from '@/core/providers/routines/routine-store';
-
-function getIdentityStore() {
-  return new SupabaseIdentityStore({
-    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    jwtSecret: process.env.AUTH_SECRET!,
-  });
-}
 
 function getRoutineStore() {
   return new RoutineStore({
@@ -26,16 +17,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -72,16 +56,9 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

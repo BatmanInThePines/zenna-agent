@@ -302,7 +302,8 @@ export class SupabaseIdentityStore implements IdentityStore {
 
   async isFather(userId: string): Promise<boolean> {
     const user = await this.getUser(userId);
-    return user?.role === 'father';
+    // Check for admin role (legacy 'father' or new 'admin')
+    return user?.role === 'admin' || user?.role === 'father';
   }
 
   /**

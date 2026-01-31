@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
 function getIdentityStore() {
@@ -16,18 +16,14 @@ const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
 // Upload avatar image (Father only for master avatar)
 export async function POST(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     const formData = await request.formData();
     const file = formData.get('avatar') as File | null;
@@ -49,7 +45,7 @@ export async function POST(request: NextRequest) {
 
     // Check if updating master avatar (Father only)
     if (target === 'master') {
-      const isFather = await identityStore.isFather(payload.userId);
+      const isFather = await identityStore.isFather(userId);
       if (!isFather) {
         return NextResponse.json({ error: 'Only Father can update master avatar' }, { status: 403 });
       }
@@ -76,7 +72,7 @@ export async function POST(request: NextRequest) {
     const base64 = Buffer.from(buffer).toString('base64');
     const dataUrl = `data:${file.type};base64,${base64}`;
 
-    await identityStore.updateSettings(payload.userId, {
+    await identityStore.updateSettings(userId, {
       avatarUrl: dataUrl,
     });
 
@@ -109,24 +105,20 @@ export async function GET() {
 // Delete avatar
 export async function DELETE(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     const { searchParams } = new URL(request.url);
     const target = searchParams.get('target');
 
     if (target === 'master') {
-      const isFather = await identityStore.isFather(payload.userId);
+      const isFather = await identityStore.isFather(userId);
       if (!isFather) {
         return NextResponse.json({ error: 'Only Father can delete master avatar' }, { status: 403 });
       }
@@ -139,7 +131,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Remove personal avatar
-    await identityStore.updateSettings(payload.userId, {
+    await identityStore.updateSettings(userId, {
       avatarUrl: undefined,
     });
 
