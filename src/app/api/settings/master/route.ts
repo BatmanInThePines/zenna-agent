@@ -8,7 +8,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
 function getIdentityStore() {
@@ -21,21 +21,17 @@ function getIdentityStore() {
 
 export async function GET() {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     // Only Father can access master settings
-    const isFather = await identityStore.isFather(payload.userId);
+    const isFather = await identityStore.isFather(userId);
     if (!isFather) {
       return NextResponse.json({ error: 'Forbidden - Father access only' }, { status: 403 });
     }
@@ -56,21 +52,17 @@ export async function GET() {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('zenna-session')?.value;
+    const session = await auth();
 
-    if (!token) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
     const identityStore = getIdentityStore();
-    const payload = await identityStore.verifyToken(token);
-    if (!payload) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     // Only Father can update master settings
-    const isFather = await identityStore.isFather(payload.userId);
+    const isFather = await identityStore.isFather(userId);
     if (!isFather) {
       return NextResponse.json({ error: 'Forbidden - Father access only' }, { status: 403 });
     }

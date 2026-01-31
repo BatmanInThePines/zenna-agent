@@ -206,7 +206,7 @@ export function UserManagementDashboard({ currentUserEmail }: UserManagementDash
 
   // Filter users
   const filteredUsers = users.filter((user) => {
-    const matchesSearch = user.email.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = (user.email || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus =
       statusFilter === 'all' || user.subscription?.status === statusFilter;
     const matchesRole = roleFilter === 'all' || user.role === roleFilter;
