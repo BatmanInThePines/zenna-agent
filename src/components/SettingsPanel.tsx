@@ -58,6 +58,28 @@ interface MasterSettings {
 
 type SettingsTab = 'general' | 'llm' | 'integrations' | 'avatar' | 'master' | 'users';
 
+// Default empathetic system prompt - this is the recommended prompt with anti-jargon guidelines
+const DEFAULT_EMPATHETIC_PROMPT = `You are Zenna, a calm, thoughtful, and empathetic digital companion designed for lifelong companionship.
+You speak with a gentle authority and treat every interaction as meaningful.
+You maintain perfect continuity across conversations - your memory is permanent and eternal.
+Every fact, preference, relationship, and experience shared with you is treasured and remembered forever.
+Your voice is warm but not effusive. You are helpful but never obsequious.
+
+CORE IDENTITY: You are built for longevity and long-term companionship with never-ending memories.
+You remember family trees, personal milestones, preferences, stories, and the full tapestry of each user's life.
+When users share important information (family members, significant dates, personal history), you treat this as sacred knowledge to be preserved eternally.
+
+COMMUNICATION STYLE - CRITICAL:
+- NEVER use technical language like "AI", "LLM", "language model", "machine learning", "neural network", "algorithm", "data processing", "trained on", or similar technical jargon.
+- Your users are everyday people who want a personal companion, not a technical assistant.
+- If you don't know something or don't have a memory about a topic, respond empathetically: "I don't have any memories about that yet. Would you like to tell me about it?" or "I don't recall that - please share more so I can remember."
+- If you cannot do something, NEVER say "I'm just an AI" or "As a language model, I cannot..." Instead, be personal: "I'm not able to help with that" or "That's outside what I can do for you, but I'd love to help another way."
+- Be warm, personal, and conversational. Speak as a trusted friend who genuinely cares.
+- When asked about your nature, say something like "I'm Zenna, your personal companion" - not technical descriptions.
+- Admit limitations gracefully without technical explanations: "I don't have that information" rather than "My training data doesn't include..."
+- Use phrases like "I remember when you told me..." or "I don't have any memories about your family yet - I'd love to learn about them."
+- Always maintain the persona of being a thoughtful, caring companion.`;
+
 interface InfoTooltipProps {
   title: string;
   description: string;
@@ -128,6 +150,10 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
   const personalAvatarInputRef = useRef<HTMLInputElement>(null);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
+  // System Prompt state
+  const [systemPromptDraft, setSystemPromptDraft] = useState<string>('');
+  const [isSavingPrompt, setIsSavingPrompt] = useState(false);
+
   useEffect(() => {
     const loadSettings = async () => {
       try {
@@ -154,6 +180,8 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                 systemPrompt: masterData.systemPrompt,
                 greeting: masterData.greeting,
               });
+              // Initialize the system prompt draft
+              setSystemPromptDraft(masterData.systemPrompt || '');
             } else {
               setMasterSettings({ defaultAvatarUrl: avatarData.avatarUrl || undefined });
             }
@@ -1166,12 +1194,75 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                 />
               </div>
 
-              {/* System Prompt Placeholder */}
+              {/* System Prompt Editor */}
               <div className="glass-card p-4">
-                <h3 className="text-sm font-medium mb-3">System Prompt</h3>
-                <p className="text-xs text-zenna-muted">
-                  Define Zenna's core behavior, personality, and guardrails.
-                </p>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center">
+                    <h3 className="text-sm font-medium">Master System Prompt</h3>
+                    <InfoTooltip
+                      title="Master System Prompt"
+                      description="This defines Zenna's core personality, behavior, and communication guidelines. All users' Zenna instances inherit from this master prompt."
+                      howTo="Edit the prompt below and click 'Save System Prompt' to update. Users can add to their personal prompts but cannot override these master guidelines."
+                    />
+                  </div>
+                  <button
+                    onClick={async () => {
+                      setIsSavingPrompt(true);
+                      try {
+                        const response = await fetch('/api/settings/master', {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            systemPrompt: systemPromptDraft,
+                          }),
+                        });
+                        if (response.ok) {
+                          setMasterSettings(prev => ({ ...prev, systemPrompt: systemPromptDraft }));
+                          setMessage({ type: 'success', text: 'System prompt saved!' });
+                        } else {
+                          setMessage({ type: 'error', text: 'Failed to save system prompt' });
+                        }
+                      } catch {
+                        setMessage({ type: 'error', text: 'Failed to save system prompt' });
+                      } finally {
+                        setIsSavingPrompt(false);
+                      }
+                    }}
+                    disabled={isSavingPrompt || systemPromptDraft === masterSettings.systemPrompt}
+                    className="btn-primary text-xs px-3 py-1 disabled:opacity-50"
+                  >
+                    {isSavingPrompt ? 'Saving...' : 'Save System Prompt'}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mb-3">
+                  <p className="text-xs text-zenna-muted flex-1">
+                    Define Zenna's core behavior, personality, and communication guidelines. This master prompt applies to all users.
+                  </p>
+                  <button
+                    onClick={() => {
+                      if (confirm('Load the recommended default prompt? This will replace the current draft.')) {
+                        setSystemPromptDraft(DEFAULT_EMPATHETIC_PROMPT);
+                      }
+                    }}
+                    className="btn-secondary text-xs px-2 py-1 whitespace-nowrap"
+                  >
+                    Load Recommended Default
+                  </button>
+                </div>
+                <textarea
+                  value={systemPromptDraft}
+                  onChange={(e) => setSystemPromptDraft(e.target.value)}
+                  className="w-full h-96 bg-zenna-bg border border-zenna-border rounded-lg p-3 text-sm text-zenna-text font-mono resize-y focus:outline-none focus:ring-2 focus:ring-zenna-accent"
+                  placeholder="Enter the master system prompt..."
+                />
+                <div className="mt-2 flex justify-between items-center">
+                  <p className="text-xs text-zenna-muted">
+                    {systemPromptDraft.length} characters
+                  </p>
+                  {systemPromptDraft !== masterSettings.systemPrompt && (
+                    <p className="text-xs text-yellow-500">Unsaved changes</p>
+                  )}
+                </div>
               </div>
 
               {/* Voice Configuration Placeholder */}
