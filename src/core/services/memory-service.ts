@@ -460,6 +460,15 @@ export class MemoryService {
  * - OPENAI_API_KEY: For OpenAI embeddings (1536 dimensions)
  */
 export function createMemoryService(): MemoryService {
+  // Determine embedding provider - prefer Gemini for cost savings and our Qdrant uses Gemini embeddings (768 dim)
+  // Can be overridden with EMBEDDING_PROVIDER env var
+  const embeddingProvider = (process.env.EMBEDDING_PROVIDER as 'openai' | 'gemini') || 'gemini';
+  const embeddingApiKey = embeddingProvider === 'gemini'
+    ? process.env.GOOGLE_AI_API_KEY
+    : process.env.OPENAI_API_KEY;
+
+  console.log('[MemoryService] Creating service with embedding provider:', embeddingProvider);
+
   return new MemoryService({
     supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
     supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -473,8 +482,9 @@ export function createMemoryService(): MemoryService {
     // Pinecone config (fallback)
     pineconeApiKey: process.env.PINECONE_API_KEY,
     pineconeIndexName: process.env.PINECONE_INDEX_NAME,
-    // Embedding config
-    embeddingApiKey: process.env.GOOGLE_AI_API_KEY || process.env.OPENAI_API_KEY,
-    embeddingProvider: process.env.OPENAI_API_KEY ? 'openai' : 'gemini',
+    // Embedding config - IMPORTANT: Qdrant was populated with Gemini embeddings (768 dimensions)
+    // Using a different provider will cause dimension mismatches!
+    embeddingApiKey,
+    embeddingProvider,
   });
 }
