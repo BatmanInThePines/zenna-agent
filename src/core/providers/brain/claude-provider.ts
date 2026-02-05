@@ -59,12 +59,20 @@ export class ClaudeProvider implements BrainProvider {
       throw new Error('Claude provider not initialized');
     }
 
-    const systemPrompt = options?.systemPrompt || this.config.systemPrompt;
+    // Extract and combine ALL system messages (master prompt + memory context + guardrails)
+    // This matches how Gemini handles systemInstruction
+    const systemMessages = messages.filter(m => m.role === 'system');
+    const systemPrompt = systemMessages.length > 0
+      ? systemMessages.map(m => m.content).join('\n\n')
+      : (options?.systemPrompt || this.config.systemPrompt || '');
+
     const claudeMessages = this.convertToClaudeMessages(messages);
 
     const response = await this.client.messages.create({
       model: options?.model || this.config.model || 'claude-sonnet-4-20250514',
       max_tokens: options?.maxTokens || this.config.maxTokens || 2048,
+      // LOW TEMPERATURE for strict adherence to system prompt (ElevenLabs recommends 0.0-0.3)
+      temperature: options?.temperature || this.config.temperature || 0.2,
       system: systemPrompt,
       messages: claudeMessages,
     });
@@ -90,16 +98,24 @@ export class ClaudeProvider implements BrainProvider {
       throw new Error('Claude provider not initialized');
     }
 
-    const systemPrompt = options?.systemPrompt || this.config.systemPrompt;
+    // Extract and combine ALL system messages (master prompt + memory context + guardrails)
+    const systemMessages = messages.filter(m => m.role === 'system');
+    const systemPrompt = systemMessages.length > 0
+      ? systemMessages.map(m => m.content).join('\n\n')
+      : (options?.systemPrompt || this.config.systemPrompt || '');
+
     const claudeMessages = this.convertToClaudeMessages(messages);
     const model = options?.model || this.config.model || 'claude-sonnet-4-20250514';
 
     const client = this.client;
+    const temperature = options?.temperature || this.config.temperature || 0.2;
+    const maxTokens = options?.maxTokens || 2048;
 
     const stream = async function* () {
       const streamResponse = await client.messages.stream({
         model,
-        max_tokens: options?.maxTokens || 2048,
+        max_tokens: maxTokens,
+        temperature,
         system: systemPrompt,
         messages: claudeMessages,
       });
@@ -118,6 +134,20 @@ export class ClaudeProvider implements BrainProvider {
       stream: stream(),
       model,
     };
+  }
+
+  /**
+   * Streaming response generator (alias for generateStreamingResponse)
+   * Used by chat-stream route - matches Gemini provider interface
+   */
+  async *generateResponseStream(
+    messages: Message[],
+    options?: Partial<BrainProviderConfig>
+  ): AsyncGenerator<string> {
+    const response = await this.generateStreamingResponse(messages, options);
+    for await (const chunk of response.stream) {
+      yield chunk;
+    }
   }
 
   private convertToClaudeMessages(

@@ -6,8 +6,17 @@ import { brainProviderFactory } from '@/core/providers/brain';
 import { ElevenLabsTTSProvider } from '@/core/providers/voice/elevenlabs-tts';
 import { RoutineStore } from '@/core/providers/routines/routine-store';
 import { INTEGRATION_MANIFESTS, getIntegrationContextSummary } from '@/core/interfaces/integration-manifest';
+import { getProductConfig, buildProductSystemPrompt } from '@/core/products';
+import { handle360AwareAction } from '@/core/actions/360aware-handler';
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
+
+// Product context passed from client apps
+interface ProductContext {
+  productId?: string;
+  location?: { lat: number; lng: number };
+  heading?: number | null;
+}
 
 // Singleton memory service instance
 let memoryServiceInstance: MemoryService | null = null;
@@ -35,11 +44,19 @@ export async function POST(request: NextRequest) {
 
     const userId = session.user.id;
 
-    const { message } = await request.json();
+    const { message, productContext } = await request.json() as {
+      message: string;
+      productContext?: ProductContext;
+    };
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'Message required' }, { status: 400 });
     }
+
+    // Check for product-specific context (e.g., 360Aware)
+    const productConfig = productContext?.productId
+      ? getProductConfig(productContext.productId)
+      : null;
 
     // Get user and master config
     const [user, masterConfig] = await Promise.all([
@@ -52,10 +69,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Get conversation history (permanent, never deleted)
+    // NOTE: Memory is shared across all apps (Zenna, 360Aware, etc.)
+    // This ensures cross-app continuity - if a user talks to 360Aware,
+    // those memories are available when they use Zenna and vice versa
     const storedHistory = await memoryService.getConversationHistory(userId);
 
     // Build message history for LLM
-    const systemPrompt = buildSystemPrompt(masterConfig, user.settings);
+    // Use product-specific prompt if this is a product request (e.g., 360Aware)
+    // Otherwise use the standard Zenna prompt
+    const systemPrompt = productConfig
+      ? buildProductSystemPrompt(productConfig)
+      : buildSystemPrompt(masterConfig, user.settings);
+
     const history: Message[] = [
       { role: 'system', content: systemPrompt },
     ];
@@ -108,16 +133,31 @@ No previous memories found related to this topic. If the user shares important i
     // Save user message to permanent storage (Supabase + Pinecone if configured)
     await memoryService.addConversationTurn(userId, 'user', message);
 
-    // Get brain provider - default to gemini-2.5-flash
-    const brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId || 'gemini-2.5-flash';
-    const brainApiKey = user.settings.brainApiKey || masterConfig.defaultBrain.apiKey || process.env.GOOGLE_AI_API_KEY;
+    // Get brain provider - prefer Claude for better rate limits and quality
+    // Order of preference: user setting > master config > Claude (if key exists) > Gemini
+    let brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId;
+    let brainApiKey = user.settings.brainApiKey || masterConfig.defaultBrain.apiKey;
+
+    // If no explicit provider set, auto-select based on available API keys
+    // Prefer Claude for better rate limits (60 RPM vs 4 RPM on Gemini free tier)
+    if (!brainProviderId || !brainApiKey) {
+      if (process.env.ANTHROPIC_API_KEY) {
+        brainProviderId = 'claude';
+        brainApiKey = process.env.ANTHROPIC_API_KEY;
+        console.log('[Chat] Using Claude provider (ANTHROPIC_API_KEY found)');
+      } else if (process.env.GOOGLE_AI_API_KEY) {
+        brainProviderId = 'gemini-2.5-flash';
+        brainApiKey = process.env.GOOGLE_AI_API_KEY;
+        console.log('[Chat] Using Gemini provider (GOOGLE_AI_API_KEY found)');
+      }
+    }
 
     if (!brainApiKey) {
       console.error('No API key configured for brain provider');
-      return NextResponse.json({ error: 'LLM not configured' }, { status: 500 });
+      return NextResponse.json({ error: 'LLM not configured. Set ANTHROPIC_API_KEY or GOOGLE_AI_API_KEY.' }, { status: 500 });
     }
 
-    console.log(`Using brain provider: ${brainProviderId}`);
+    console.log(`[Chat] Using brain provider: ${brainProviderId}`);
 
     const brainProvider = brainProviderFactory.create(brainProviderId, {
       apiKey: brainApiKey,
@@ -128,14 +168,25 @@ No previous memories found related to this topic. If the user shares important i
     const response = await brainProvider.generateResponse(history);
     console.log('Response generated successfully');
 
-    // Check for action blocks in response (e.g., schedule creation)
+    // Check for action blocks in response (e.g., schedule creation, 360Aware queries)
     let responseText = response.content;
-    const actionResult = await processActionBlocks(response.content, userId, user.settings);
+    let highlights: Array<{ type: string; id: string; action: 'pulse' | 'highlight' }> | undefined;
+
+    const actionResult = await processActionBlocks(
+      response.content,
+      userId,
+      user.settings,
+      productContext // Pass product context for 360Aware actions
+    );
     if (actionResult) {
       responseText = actionResult.cleanedResponse;
       // If action was processed, add confirmation to response
       if (actionResult.actionConfirmation) {
         responseText = actionResult.actionConfirmation;
+      }
+      // Capture highlights for map integration (360Aware)
+      if (actionResult.highlights) {
+        highlights = actionResult.highlights;
       }
     }
 
@@ -196,6 +247,7 @@ No previous memories found related to this topic. If the user shares important i
     return NextResponse.json({
       response: responseText,
       audioUrl,
+      highlights, // Map highlights for 360Aware
       emotion,
     });
   } catch (error) {
@@ -204,12 +256,17 @@ No previous memories found related to this topic. If the user shares important i
   }
 }
 
-// Process action blocks in LLM response (e.g., schedule creation, light control)
+// Process action blocks in LLM response (e.g., schedule creation, light control, 360Aware queries)
 async function processActionBlocks(
   responseContent: string,
   userId: string,
-  userSettings: UserSettings
-): Promise<{ cleanedResponse: string; actionConfirmation?: string } | null> {
+  userSettings: UserSettings,
+  productContext?: ProductContext
+): Promise<{
+  cleanedResponse: string;
+  actionConfirmation?: string;
+  highlights?: Array<{ type: string; id: string; action: 'pulse' | 'highlight' }>;
+} | null> {
   // Look for JSON action blocks
   const jsonBlockRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
   const matches = [...responseContent.matchAll(jsonBlockRegex)];
@@ -219,6 +276,7 @@ async function processActionBlocks(
   }
 
   let actionConfirmation: string | undefined;
+  let highlights: Array<{ type: string; id: string; action: 'pulse' | 'highlight' }> | undefined;
 
   for (const match of matches) {
     try {
@@ -256,6 +314,21 @@ async function processActionBlocks(
           await executeHueCommand(hueConfig, actionData);
           actionConfirmation = `Done! I've ${actionData.state === 'on' ? 'turned on' : 'turned off'} the ${actionData.target || 'lights'}.`;
         }
+      } else if (actionData.action === 'query_360aware') {
+        // 360Aware road safety data query
+        if (productContext?.location) {
+          console.log(`360Aware query: ${actionData.type} at ${productContext.location.lat}, ${productContext.location.lng}`);
+          const result = await handle360AwareAction(actionData, {
+            lat: productContext.location.lat,
+            lng: productContext.location.lng,
+            heading: productContext.heading,
+          });
+          actionConfirmation = result.result;
+          highlights = result.highlights;
+        } else {
+          console.warn('360Aware action requested but no location provided');
+          actionConfirmation = "I need your location to check road conditions. Please enable GPS.";
+        }
       }
     } catch (error) {
       console.error('Failed to process action block:', error);
@@ -268,6 +341,7 @@ async function processActionBlocks(
   return {
     cleanedResponse: actionConfirmation || cleanedResponse,
     actionConfirmation,
+    highlights,
   };
 }
 

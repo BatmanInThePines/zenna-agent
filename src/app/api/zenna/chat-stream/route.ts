@@ -157,12 +157,27 @@ NEVER invent names or facts. If you don't know something, ask.`,
       await memoryService.addConversationTurn(userId, 'user', message);
     }
 
-    // Get brain provider
-    const brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId || 'gemini-2.5-flash';
-    const brainApiKey = user.settings.brainApiKey || masterConfig.defaultBrain.apiKey || process.env.GOOGLE_AI_API_KEY;
+    // Get brain provider - prefer Claude for better rate limits and quality
+    // Order of preference: user setting > master config > Claude (if key exists) > Gemini
+    let brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId;
+    let brainApiKey = user.settings.brainApiKey || masterConfig.defaultBrain.apiKey;
+
+    // If no explicit provider set, auto-select based on available API keys
+    // Prefer Claude for better rate limits (60 RPM vs 4 RPM on Gemini free tier)
+    if (!brainProviderId || !brainApiKey) {
+      if (process.env.ANTHROPIC_API_KEY) {
+        brainProviderId = 'claude';
+        brainApiKey = process.env.ANTHROPIC_API_KEY;
+        console.log('[Chat] Using Claude provider (ANTHROPIC_API_KEY found)');
+      } else if (process.env.GOOGLE_AI_API_KEY) {
+        brainProviderId = 'gemini-2.5-flash';
+        brainApiKey = process.env.GOOGLE_AI_API_KEY;
+        console.log('[Chat] Using Gemini provider (GOOGLE_AI_API_KEY found)');
+      }
+    }
 
     if (!brainApiKey) {
-      return new Response(JSON.stringify({ error: 'LLM not configured' }), {
+      return new Response(JSON.stringify({ error: 'LLM not configured. Set ANTHROPIC_API_KEY or GOOGLE_AI_API_KEY.' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       });
