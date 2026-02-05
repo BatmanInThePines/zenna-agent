@@ -153,12 +153,44 @@ export class ClaudeProvider implements BrainProvider {
   private convertToClaudeMessages(
     messages: Message[]
   ): Array<{ role: 'user' | 'assistant'; content: string }> {
-    return messages
+    // Filter out system messages
+    const nonSystemMessages = messages
       .filter((m) => m.role !== 'system')
       .map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       }));
+
+    // CRITICAL: Claude API requires the first message to be from 'user'
+    // If the conversation starts with an assistant message (e.g., greeting),
+    // we need to skip those initial assistant messages
+    let startIndex = 0;
+    while (startIndex < nonSystemMessages.length && nonSystemMessages[startIndex].role === 'assistant') {
+      startIndex++;
+    }
+
+    // If all messages are assistant messages (shouldn't happen), return empty array
+    // which will cause an error, but that's better than a cryptic API error
+    if (startIndex >= nonSystemMessages.length) {
+      console.warn('[ClaudeProvider] No user messages found in conversation');
+      return nonSystemMessages.length > 0 ? nonSystemMessages.slice(-1) : [];
+    }
+
+    const result = nonSystemMessages.slice(startIndex);
+
+    // Also ensure alternating roles by merging consecutive same-role messages
+    // Claude requires strict alternation: user, assistant, user, assistant...
+    const merged: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const msg of result) {
+      if (merged.length === 0 || merged[merged.length - 1].role !== msg.role) {
+        merged.push(msg);
+      } else {
+        // Merge with previous message of same role
+        merged[merged.length - 1].content += '\n\n' + msg.content;
+      }
+    }
+
+    return merged;
   }
 
   private mapStopReason(
