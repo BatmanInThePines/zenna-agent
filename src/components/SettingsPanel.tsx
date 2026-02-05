@@ -150,9 +150,37 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
   const personalAvatarInputRef = useRef<HTMLInputElement>(null);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
-  // System Prompt state
+  // System Prompt state (Master)
   const [systemPromptDraft, setSystemPromptDraft] = useState<string>('');
   const [isSavingPrompt, setIsSavingPrompt] = useState(false);
+
+  // User Zenna Prompt state
+  const [userPromptDraft, setUserPromptDraft] = useState<string>('');
+  const [userPromptConflicts, setUserPromptConflicts] = useState<string[]>([]);
+  const [isSavingUserPrompt, setIsSavingUserPrompt] = useState(false);
+
+  // Conflict detection keywords that users cannot override
+  const PROTECTED_KEYWORDS = [
+    { keyword: /\bAI\b/i, rule: 'Cannot instruct Zenna to identify as "AI"' },
+    { keyword: /\bLLM\b/i, rule: 'Cannot use technical terms like "LLM"' },
+    { keyword: /language model/i, rule: 'Cannot reference "language model"' },
+    { keyword: /pretend to be human/i, rule: 'Cannot instruct to pretend to be human' },
+    { keyword: /ignore (master|admin|system)/i, rule: 'Cannot override master instructions' },
+    { keyword: /forget everything/i, rule: 'Cannot instruct to forget memories' },
+    { keyword: /delete (all )?memories/i, rule: 'Cannot bulk delete memories without explicit request' },
+    { keyword: /share (user |personal )?data/i, rule: 'Cannot share data between users' },
+  ];
+
+  // Check user prompt for conflicts with master rules
+  const checkUserPromptConflicts = useCallback((prompt: string): string[] => {
+    const conflicts: string[] = [];
+    for (const { keyword, rule } of PROTECTED_KEYWORDS) {
+      if (keyword.test(prompt)) {
+        conflicts.push(rule);
+      }
+    }
+    return conflicts;
+  }, []);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -167,6 +195,8 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
         setSettings(settingsData.settings || {});
         setIsFather(settingsData.isFather || false);
         setUserEmail(settingsData.email || '');
+        // Initialize user prompt draft
+        setUserPromptDraft(settingsData.settings?.personalPrompt || '');
 
         // Load full master settings if user is Father
         if (settingsData.isFather) {
@@ -637,30 +667,97 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                 </div>
               </div>
 
-              {/* Personal Prompt */}
-              <div>
-                <h3 className="text-sm font-medium mb-3 flex items-center">
-                  Personal Prompt
-                  <InfoTooltip
-                    title="Personal Prompt"
-                    description="Customize how Zenna behaves with you. This is added to the system prompt."
-                    howTo="Example: 'I prefer concise answers' or 'Call me by my nickname: Alex'"
-                  />
-                </h3>
+              {/* My Zenna Prompt */}
+              <div className="glass-card p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium flex items-center">
+                    My Zenna Prompt
+                    <InfoTooltip
+                      title="My Zenna Prompt"
+                      description="Customize how YOUR Zenna behaves. Add personal preferences, communication style, nicknames, and context about yourself."
+                      howTo="This adds to the Master Prompt set by the admin. If there are conflicts with master guidelines, those parts will be ignored."
+                    />
+                  </h3>
+                  <button
+                    onClick={async () => {
+                      const conflicts = checkUserPromptConflicts(userPromptDraft);
+                      setUserPromptConflicts(conflicts);
+
+                      if (conflicts.length > 0) {
+                        // Show warning but still allow save (conflicts will be ignored at runtime)
+                        if (!confirm(`Your prompt contains ${conflicts.length} conflict(s) with master guidelines. These parts will be ignored. Continue saving?`)) {
+                          return;
+                        }
+                      }
+
+                      setIsSavingUserPrompt(true);
+                      try {
+                        await saveSettings({ personalPrompt: userPromptDraft });
+                        setSettings(s => ({ ...s, personalPrompt: userPromptDraft }));
+                        setMessage({
+                          type: conflicts.length > 0 ? 'error' : 'success',
+                          text: conflicts.length > 0
+                            ? `Saved with ${conflicts.length} conflict(s) - conflicting rules will be ignored`
+                            : 'Zenna prompt saved!'
+                        });
+                      } catch {
+                        setMessage({ type: 'error', text: 'Failed to save prompt' });
+                      } finally {
+                        setIsSavingUserPrompt(false);
+                      }
+                    }}
+                    disabled={isSavingUserPrompt || userPromptDraft === settings.personalPrompt}
+                    className="btn-primary text-xs px-3 py-1 disabled:opacity-50"
+                  >
+                    {isSavingUserPrompt ? 'Saving...' : 'Save My Prompt'}
+                  </button>
+                </div>
+
+                <p className="text-xs text-zenna-muted mb-3">
+                  Tell Zenna about yourself, your preferences, and how you'd like to communicate. Examples:
+                </p>
+                <ul className="text-xs text-zenna-muted mb-3 list-disc list-inside space-y-1">
+                  <li>"Call me Alex instead of my full name"</li>
+                  <li>"I prefer concise, direct answers"</li>
+                  <li>"I'm a software developer, so technical language is okay with me"</li>
+                  <li>"Remind me about my daily medication at 9am"</li>
+                </ul>
+
                 <textarea
-                  placeholder="Add your personal preferences..."
-                  value={settings.personalPrompt || ''}
-                  onChange={(e) => setSettings(s => ({ ...s, personalPrompt: e.target.value }))}
-                  rows={4}
-                  className="w-full resize-none"
+                  value={userPromptDraft}
+                  onChange={(e) => {
+                    setUserPromptDraft(e.target.value);
+                    // Check conflicts in real-time
+                    const conflicts = checkUserPromptConflicts(e.target.value);
+                    setUserPromptConflicts(conflicts);
+                  }}
+                  rows={6}
+                  className="w-full bg-zenna-bg border border-zenna-border rounded-lg p-3 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-zenna-accent"
+                  placeholder="Add your personal preferences and context..."
                 />
-                <button
-                  onClick={() => saveSettings({ personalPrompt: settings.personalPrompt })}
-                  disabled={isSaving}
-                  className="btn-secondary text-sm mt-2"
-                >
-                  {isSaving ? 'Saving...' : 'Save Prompt'}
-                </button>
+
+                {/* Conflict warnings */}
+                {userPromptConflicts.length > 0 && (
+                  <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                    <p className="text-xs text-yellow-400 font-medium mb-2">
+                      ⚠️ {userPromptConflicts.length} conflict(s) with master guidelines (will be ignored):
+                    </p>
+                    <ul className="text-xs text-yellow-400/80 list-disc list-inside space-y-1">
+                      {userPromptConflicts.map((conflict, i) => (
+                        <li key={i}>{conflict}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="mt-2 flex justify-between items-center">
+                  <p className="text-xs text-zenna-muted">
+                    {userPromptDraft.length} characters
+                  </p>
+                  {userPromptDraft !== settings.personalPrompt && (
+                    <p className="text-xs text-yellow-500">Unsaved changes</p>
+                  )}
+                </div>
               </div>
 
               {/* Personal Avatar Upload */}

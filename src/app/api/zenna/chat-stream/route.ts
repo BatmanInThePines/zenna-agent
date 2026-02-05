@@ -347,22 +347,34 @@ function analyzeEmotion(text: string): EmotionType {
   return scores[0].emotion;
 }
 
+/**
+ * Build the complete system prompt with proper hierarchy:
+ * 1. MASTER PROMPT (Super Admin defined) - Foundational, cannot be overridden
+ * 2. IMMUTABLE RULES - Absolute rules that apply to all users
+ * 3. USER PROMPT (Personal) - Additive preferences, cannot conflict with master
+ *
+ * IMPORTANT: If user prompt conflicts with master guidelines, master wins.
+ */
 function buildSystemPrompt(
   masterConfig: Awaited<ReturnType<SupabaseIdentityStore['getMasterConfig']>>,
   userSettings: UserSettings
 ): string {
-  let prompt = masterConfig.systemPrompt;
+  // Start with the Master Prompt (foundational)
+  let prompt = `=== MASTER GUIDELINES (IMMUTABLE - ALWAYS FOLLOW) ===\n\n${masterConfig.systemPrompt}`;
 
+  // Add immutable rules
   if (masterConfig.immutableRules.length > 0) {
-    prompt += `\n\nImmutable rules (never violate these):\n${masterConfig.immutableRules
+    prompt += `\n\n=== IMMUTABLE RULES (NEVER VIOLATE) ===\n${masterConfig.immutableRules
       .map((r, i) => `${i + 1}. ${r}`)
       .join('\n')}`;
   }
 
+  // Add guardrails
   if (masterConfig.guardrails.blockedTopics?.length) {
-    prompt += `\n\nDo not discuss: ${masterConfig.guardrails.blockedTopics.join(', ')}`;
+    prompt += `\n\nBlocked topics (never discuss): ${masterConfig.guardrails.blockedTopics.join(', ')}`;
   }
 
+  // Add integrations context
   const connectedIntegrations: string[] = [];
 
   if (userSettings.integrations?.hue?.accessToken) {
@@ -381,8 +393,13 @@ The user has connected their Notion workspace.`;
     prompt += `\n\nConnected integrations: ${connectedIntegrations.join(', ')}`;
   }
 
+  // Add User Personal Prompt (additive, cannot override master)
   if (userSettings.personalPrompt) {
-    prompt += `\n\nUser preferences:\n${userSettings.personalPrompt}`;
+    prompt += `\n\n=== USER PERSONAL PREFERENCES (ADDITIVE) ===
+The following are the user's personal preferences. Follow these UNLESS they conflict with the Master Guidelines above.
+If there is any conflict, the Master Guidelines always win.
+
+${userSettings.personalPrompt}`;
   }
 
   return prompt;
