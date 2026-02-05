@@ -330,6 +330,7 @@ export class SupabaseIdentityStore implements IdentityStore {
 
   /**
    * Add a turn to session conversation history
+   * Note: If sessionId is not a valid session, we'll find or create one for the user
    */
   async addSessionTurn(
     sessionId: string,
@@ -337,8 +338,37 @@ export class SupabaseIdentityStore implements IdentityStore {
     role: 'user' | 'assistant' | 'system',
     content: string
   ): Promise<void> {
+    // Try to find an existing active session for this user
+    let validSessionId = sessionId;
+
+    // Check if the provided sessionId exists in sessions table
+    const { data: existingSession } = await this.client
+      .from('sessions')
+      .select('id')
+      .eq('id', sessionId)
+      .single();
+
+    if (!existingSession) {
+      // Session doesn't exist - find user's most recent session or create one
+      const { data: userSession } = await this.client
+        .from('sessions')
+        .select('id')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (userSession) {
+        validSessionId = userSession.id;
+      } else {
+        // No session exists - create one
+        const newSession = await this.createSession(userId);
+        validSessionId = newSession.id;
+      }
+    }
+
     const { error } = await this.client.from('session_turns').insert({
-      session_id: sessionId,
+      session_id: validSessionId,
       user_id: userId,
       role,
       content,
