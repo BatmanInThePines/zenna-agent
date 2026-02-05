@@ -69,7 +69,7 @@ export class ClaudeProvider implements BrainProvider {
     const claudeMessages = this.convertToClaudeMessages(messages);
 
     const response = await this.client.messages.create({
-      model: options?.model || this.config.model || 'claude-3-5-sonnet-20241022',
+      model: options?.model || this.config.model || 'claude-sonnet-4-20250514',
       max_tokens: options?.maxTokens || this.config.maxTokens || 2048,
       // LOW TEMPERATURE for strict adherence to system prompt (ElevenLabs recommends 0.0-0.3)
       temperature: options?.temperature || this.config.temperature || 0.2,
@@ -105,7 +105,7 @@ export class ClaudeProvider implements BrainProvider {
       : (options?.systemPrompt || this.config.systemPrompt || '');
 
     const claudeMessages = this.convertToClaudeMessages(messages);
-    const model = options?.model || this.config.model || 'claude-3-5-sonnet-20241022';
+    const model = options?.model || this.config.model || 'claude-sonnet-4-20250514';
 
     // Debug logging
     console.log('[ClaudeProvider] Preparing streaming request:', {
