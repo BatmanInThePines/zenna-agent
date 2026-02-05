@@ -3,6 +3,13 @@
  *
  * Default reasoning model for Zenna: Gemini 2.5 Flash
  * Also supports Gemini 2.5 Pro for users who want higher capability
+ *
+ * SYSTEM PROMPT ENFORCEMENT:
+ * Following ElevenLabs best practices for LLM adherence:
+ * 1. System instructions are passed via systemInstruction parameter (not in chat)
+ * 2. Low temperature (0.1-0.3) for deterministic, consistent responses
+ * 3. Clear section headers for guardrails and rules
+ * 4. Critical instructions are emphasized with "This step is important"
  */
 
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
@@ -19,7 +26,6 @@ export class GeminiProvider implements BrainProvider {
   readonly providerName: string;
 
   private client: GoogleGenerativeAI | null = null;
-  private model: GenerativeModel | null = null;
   private config: BrainProviderConfig;
 
   constructor(config: BrainProviderConfig, variant: 'flash' | 'pro' = 'flash') {
@@ -29,26 +35,29 @@ export class GeminiProvider implements BrainProvider {
 
     if (config.apiKey) {
       this.client = new GoogleGenerativeAI(config.apiKey);
-      // Use stable Gemini model names (gemini-2.0-flash is the latest stable)
-      const modelName = variant === 'flash'
-        ? 'gemini-2.0-flash'
-        : 'gemini-1.5-pro';
-      this.model = this.client.getGenerativeModel({ model: config.model || modelName });
     }
   }
 
+  /**
+   * Get model name based on variant
+   */
+  private getModelName(variant: 'flash' | 'pro' = 'flash'): string {
+    return variant === 'flash' ? 'gemini-2.0-flash' : 'gemini-1.5-pro';
+  }
+
   async isAvailable(): Promise<boolean> {
-    return this.client !== null && this.model !== null;
+    return this.client !== null;
   }
 
   async validateCredentials(): Promise<{ valid: boolean; error?: string }> {
-    if (!this.client || !this.model) {
+    if (!this.client) {
       return { valid: false, error: 'API key not configured' };
     }
 
     try {
       // Simple validation by attempting to generate
-      const result = await this.model.generateContent('Say "ok" if you can hear me.');
+      const model = this.client.getGenerativeModel({ model: this.getModelName() });
+      const result = await model.generateContent('Say "ok" if you can hear me.');
       const text = result.response.text();
       return { valid: text.length > 0 };
     } catch (error) {
@@ -61,28 +70,35 @@ export class GeminiProvider implements BrainProvider {
     messages: Message[],
     options?: Partial<BrainProviderConfig>
   ): Promise<BrainResponse> {
-    if (!this.model) {
+    if (!this.client) {
       throw new Error('Gemini provider not initialized');
     }
 
-    const systemPrompt = options?.systemPrompt || this.config.systemPrompt || '';
-    const history = this.convertToGeminiHistory(messages);
+    // Extract system prompt from messages (first system message is master prompt)
+    const systemMessages = messages.filter(m => m.role === 'system');
+    const systemInstruction = systemMessages.map(m => m.content).join('\n\n');
 
-    const chat = this.model.startChat({
-      history,
+    // Create model with systemInstruction - THIS IS THE KEY FIX
+    // Gemini treats systemInstruction as authoritative, non-negotiable instructions
+    const model = this.client.getGenerativeModel({
+      model: this.config.model || this.getModelName(),
+      systemInstruction: systemInstruction || undefined,
       generationConfig: {
         maxOutputTokens: options?.maxTokens || this.config.maxTokens || 2048,
-        temperature: options?.temperature || this.config.temperature || 0.7,
+        // LOW TEMPERATURE for strict adherence to system prompt (ElevenLabs recommends 0.0-0.3)
+        temperature: options?.temperature || this.config.temperature || 0.2,
       },
     });
 
+    // Convert non-system messages to Gemini history format
+    const history = this.convertToGeminiHistory(messages);
+
+    const chat = model.startChat({ history });
+
     // Get the last user message
     const lastMessage = messages[messages.length - 1];
-    const prompt = systemPrompt
-      ? `${systemPrompt}\n\nUser: ${lastMessage.content}`
-      : lastMessage.content;
 
-    const result = await chat.sendMessage(prompt);
+    const result = await chat.sendMessage(lastMessage.content);
     const response = result.response;
 
     return {
@@ -96,27 +112,34 @@ export class GeminiProvider implements BrainProvider {
     messages: Message[],
     options?: Partial<BrainProviderConfig>
   ): Promise<StreamingBrainResponse> {
-    if (!this.model) {
+    if (!this.client) {
       throw new Error('Gemini provider not initialized');
     }
 
-    const systemPrompt = options?.systemPrompt || this.config.systemPrompt || '';
-    const history = this.convertToGeminiHistory(messages.slice(0, -1));
+    // Extract system prompt from messages (first system message is master prompt)
+    const systemMessages = messages.filter(m => m.role === 'system');
+    const systemInstruction = systemMessages.map(m => m.content).join('\n\n');
 
-    const chat = this.model.startChat({
-      history,
+    // Create model with systemInstruction - THIS IS THE KEY FIX
+    // Gemini treats systemInstruction as authoritative, non-negotiable instructions
+    const model = this.client.getGenerativeModel({
+      model: this.config.model || this.getModelName(),
+      systemInstruction: systemInstruction || undefined,
       generationConfig: {
         maxOutputTokens: options?.maxTokens || this.config.maxTokens || 2048,
-        temperature: options?.temperature || this.config.temperature || 0.7,
+        // LOW TEMPERATURE for strict adherence to system prompt (ElevenLabs recommends 0.0-0.3)
+        temperature: options?.temperature || this.config.temperature || 0.2,
       },
     });
 
-    const lastMessage = messages[messages.length - 1];
-    const prompt = systemPrompt
-      ? `${systemPrompt}\n\nUser: ${lastMessage.content}`
-      : lastMessage.content;
+    // Convert non-system messages to Gemini history
+    const history = this.convertToGeminiHistory(messages.slice(0, -1));
 
-    const streamResult = await chat.sendMessageStream(prompt);
+    const chat = model.startChat({ history });
+
+    const lastMessage = messages[messages.length - 1];
+
+    const streamResult = await chat.sendMessageStream(lastMessage.content);
 
     const stream = async function* () {
       for await (const chunk of streamResult.stream) {
@@ -131,6 +154,20 @@ export class GeminiProvider implements BrainProvider {
       stream: stream(),
       model: this.providerId,
     };
+  }
+
+  /**
+   * Streaming response generator (alias for generateStreamingResponse)
+   * Used by chat-stream route
+   */
+  async *generateResponseStream(
+    messages: Message[],
+    options?: Partial<BrainProviderConfig>
+  ): AsyncGenerator<string> {
+    const response = await this.generateStreamingResponse(messages, options);
+    for await (const chunk of response.stream) {
+      yield chunk;
+    }
   }
 
   private convertToGeminiHistory(messages: Message[]): Array<{

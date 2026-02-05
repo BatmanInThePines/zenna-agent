@@ -484,38 +484,70 @@ function analyzeEmotion(text: string): EmotionType {
 }
 
 /**
- * Build the complete system prompt with proper hierarchy:
- * 1. MASTER PROMPT (Super Admin defined) - Foundational, cannot be overridden
- * 2. IMMUTABLE RULES - Absolute rules that apply to all users
- * 3. USER PROMPT (Personal) - Additive preferences, cannot conflict with master
+ * Build the complete system prompt with proper hierarchy following ElevenLabs best practices:
  *
- * IMPORTANT: If user prompt conflicts with master guidelines, master wins.
+ * STRUCTURE (following ElevenLabs prompt engineering guidelines):
+ * 1. # Role - Core identity and personality
+ * 2. # Goal - Primary objectives
+ * 3. # Guardrails - Non-negotiable rules (models pay extra attention to this section)
+ * 4. # Tools - Available integrations and capabilities
+ * 5. # User Preferences - Personal preferences (cannot override guardrails)
+ *
+ * KEY PRINCIPLES:
+ * - Low temperature (0.2) for consistent adherence
+ * - Clear section headers with markdown
+ * - Critical instructions repeated and emphasized
+ * - Guardrails section is treated with highest priority by the model
  */
 function buildSystemPrompt(
   masterConfig: Awaited<ReturnType<SupabaseIdentityStore['getMasterConfig']>>,
   userSettings: UserSettings
 ): string {
-  // Start with the Master Prompt (foundational)
-  let prompt = `=== MASTER GUIDELINES (IMMUTABLE - ALWAYS FOLLOW) ===\n\n${masterConfig.systemPrompt}`;
+  // ElevenLabs-style structured prompt with markdown headers
+  let prompt = `# Role
 
-  // Add immutable rules
+${masterConfig.systemPrompt}
+
+# Goal
+
+Your goal is to be a lifelong companion who remembers everything shared with you. You maintain perfect continuity across all conversations. You speak warmly but not effusively, and you treat every interaction as meaningful. This step is important.
+
+# Guardrails
+
+The following rules are ABSOLUTE and must NEVER be violated. This step is important.
+
+`;
+
+  // Add immutable rules to Guardrails section
   if (masterConfig.immutableRules.length > 0) {
-    prompt += `\n\n=== IMMUTABLE RULES (NEVER VIOLATE) ===\n${masterConfig.immutableRules
-      .map((r, i) => `${i + 1}. ${r}`)
-      .join('\n')}`;
+    masterConfig.immutableRules.forEach((rule, i) => {
+      prompt += `${i + 1}. ${rule}\n`;
+    });
   }
 
-  // Add guardrails
+  // Add critical guardrails about language
+  prompt += `
+CRITICAL LANGUAGE RULES (NEVER VIOLATE):
+- NEVER use the words: "AI", "LLM", "language model", "machine learning", "neural network", "algorithm", "trained on", "data processing"
+- NEVER say: "As an AI...", "I'm just an AI...", "I cannot do that because I'm an AI..."
+- If you cannot do something, say: "I'm not able to help with that" or "That's outside what I can do"
+- If you don't have a memory, say: "I don't have any memories about that yet - would you like to tell me about it?"
+- Always speak as a caring companion, never as software. This step is important.
+`;
+
+  // Add blocked topics if any
   if (masterConfig.guardrails.blockedTopics?.length) {
-    prompt += `\n\nBlocked topics (never discuss): ${masterConfig.guardrails.blockedTopics.join(', ')}`;
+    prompt += `\nBLOCKED TOPICS (never discuss): ${masterConfig.guardrails.blockedTopics.join(', ')}\n`;
   }
 
-  // Add connected integrations context
+  // Add Tools section for integrations
   const connectedIntegrations: string[] = [];
+
+  prompt += `\n# Tools\n`;
 
   if (userSettings.integrations?.hue?.accessToken) {
     connectedIntegrations.push('hue');
-    prompt += `\n\n## Philips Hue Integration (CONNECTED)
+    prompt += `\n## Philips Hue Integration (CONNECTED)
 You can control the user's Philips Hue lights. Available actions:
 - Turn lights on/off (say "turn on the [room/light name] lights" or "turn off the lights")
 - Adjust brightness (say "dim the lights to 50%" or "set brightness to 80%")
@@ -533,25 +565,30 @@ When the user wants to schedule something, respond with a JSON action block like
 {"action": "create_schedule", "integration": "hue", "actionId": "turn-on", "time": "07:00", "schedule_type": "daily", "parameters": {"target": "bedroom", "brightness": 100}}
 \`\`\`
 
-Schedule types: "once", "daily", "weekly" (with daysOfWeek: [0-6] where 0=Sunday)`;
+Schedule types: "once", "daily", "weekly" (with daysOfWeek: [0-6] where 0=Sunday)
+`;
   }
 
   if (userSettings.externalContext?.notion?.token) {
     connectedIntegrations.push('notion');
-    prompt += `\n\n## Notion Integration (CONNECTED)
+    prompt += `\n## Notion Integration (CONNECTED)
 The user has connected their Notion workspace. You have access to their knowledge base.
-When they ask questions that might relate to their notes, you can reference this information.`;
+When they ask questions that might relate to their notes, you can reference this information.
+`;
   }
 
   if (connectedIntegrations.length > 0) {
-    prompt += `\n\nConnected integrations: ${connectedIntegrations.join(', ')}`;
+    prompt += `\nConnected integrations: ${connectedIntegrations.join(', ')}\n`;
+  } else {
+    prompt += `\nNo external integrations currently connected.\n`;
   }
 
-  // Add User Personal Prompt (additive, cannot override master)
+  // Add User Personal Preferences section (cannot override guardrails)
   if (userSettings.personalPrompt) {
-    prompt += `\n\n=== USER PERSONAL PREFERENCES (ADDITIVE) ===
-The following are the user's personal preferences. Follow these UNLESS they conflict with the Master Guidelines above.
-If there is any conflict, the Master Guidelines always win.
+    prompt += `\n# User Preferences
+
+The following are the user's personal preferences. Follow these UNLESS they conflict with the Guardrails above.
+If there is any conflict, the Guardrails ALWAYS win. This step is important.
 
 ${userSettings.personalPrompt}`;
   }
