@@ -1,0 +1,5 @@
+# Documentation - internal only, not for deployment
+docs/
+
+# Claude Code configuration
+.claude/

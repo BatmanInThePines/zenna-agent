@@ -17,7 +17,15 @@
       "Bash(git checkout:*)",
       "Bash(timeout:*)",
       "Bash(npx vercel:*)",
-      "Bash(git pull:*)"
+      "Bash(git pull:*)",
+      "Bash(npx next build:*)",
+      "Bash(dir node_modules.binnext*)",
+      "Bash(node scripts/check-memories.js:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(curl:*)",
+      "Bash(python -c:*)",
+      "Bash(node:*)",
+      "Bash(vercel env ls:*)"
     ]
   }
 }

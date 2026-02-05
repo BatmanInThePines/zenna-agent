@@ -72,18 +72,34 @@ export class MemoryService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
+    console.log('[MemoryService] Initializing memory service...');
+    console.log('[MemoryService] Config check:', {
+      hasEmbeddingApiKey: !!this.config.embeddingApiKey,
+      embeddingProvider: this.config.embeddingProvider,
+      vectorProvider: this.config.vectorProvider,
+      hasQdrantUrl: !!this.config.qdrantUrl,
+      hasQdrantCollection: !!this.config.qdrantCollectionName,
+      hasPineconeKey: !!this.config.pineconeApiKey,
+      hasPineconeIndex: !!this.config.pineconeIndexName,
+    });
+
     // Create embedding provider if API key is available
     if (this.config.embeddingApiKey) {
       if (this.config.embeddingProvider === 'openai') {
         this.embeddingProvider = new OpenAIEmbeddingProvider(this.config.embeddingApiKey);
+        console.log('[MemoryService] Using OpenAI embeddings');
       } else {
         // Default to Gemini (more cost-effective)
         this.embeddingProvider = new GeminiEmbeddingProvider(this.config.embeddingApiKey);
+        console.log('[MemoryService] Using Gemini embeddings');
       }
+    } else {
+      console.warn('[MemoryService] No embedding API key configured!');
     }
 
     // Determine which vector store to use (prefer Qdrant for cost savings)
     const preferredProvider = this.config.vectorProvider || 'qdrant';
+    console.log('[MemoryService] Preferred vector provider:', preferredProvider);
 
     // Try Qdrant first (self-hosted or cloud)
     if (
@@ -93,6 +109,10 @@ export class MemoryService {
       this.embeddingProvider
     ) {
       try {
+        console.log('[MemoryService] Attempting to initialize Qdrant...');
+        console.log('[MemoryService] Qdrant URL:', this.config.qdrantUrl);
+        console.log('[MemoryService] Qdrant Collection:', this.config.qdrantCollectionName);
+
         this.longTermStore = new QdrantLongTermStore(
           {
             url: this.config.qdrantUrl,
@@ -104,11 +124,18 @@ export class MemoryService {
 
         await this.longTermStore.initialize?.();
         this.vectorProvider = 'qdrant';
-        console.log('[MemoryService] Qdrant long-term memory initialized');
+        console.log('[MemoryService] ✓ Qdrant long-term memory initialized successfully');
       } catch (error) {
         console.warn('[MemoryService] Qdrant initialization failed, trying Pinecone:', error);
         this.longTermStore = null;
       }
+    } else {
+      console.log('[MemoryService] Qdrant not configured or missing dependencies:', {
+        preferredProvider,
+        hasQdrantUrl: !!this.config.qdrantUrl,
+        hasQdrantCollection: !!this.config.qdrantCollectionName,
+        hasEmbeddingProvider: !!this.embeddingProvider,
+      });
     }
 
     // Fall back to Pinecone if Qdrant not configured or failed
@@ -278,7 +305,10 @@ export class MemoryService {
       types?: MemoryMetadata['type'][];
     }
   ): Promise<RelevantMemory[]> {
+    console.log(`[MemoryService] searchMemories called - longTermStore: ${!!this.longTermStore}, vectorProvider: ${this.vectorProvider}`);
+
     if (!this.longTermStore) {
+      console.log('[MemoryService] No long-term store - falling back to keyword search');
       // Fall back to recent conversation history
       const history = await this.getConversationHistory(userId);
       // Simple keyword matching fallback
@@ -294,35 +324,54 @@ export class MemoryService {
         }));
     }
 
-    const results = await this.longTermStore.search({
-      query,
-      userId,
-      topK: options?.topK ?? 10,
-      threshold: options?.threshold ?? 0.5,
-      filters: options?.types ? { type: options.types } : undefined,
-    });
+    console.log(`[MemoryService] Searching Qdrant with topK=${options?.topK ?? 10}, threshold=${options?.threshold ?? 0.5}`);
 
-    return results.map((r) => ({
-      content: r.entry.content,
-      type: r.entry.metadata.type,
-      importance: r.entry.metadata.importance,
-      createdAt: r.entry.createdAt,
-      score: r.score,
-    }));
+    try {
+      const results = await this.longTermStore.search({
+        query,
+        userId,
+        topK: options?.topK ?? 10,
+        threshold: options?.threshold ?? 0.5,
+        filters: options?.types ? { type: options.types } : undefined,
+      });
+
+      console.log(`[MemoryService] Qdrant returned ${results.length} results`);
+
+      return results.map((r) => ({
+        content: r.entry.content,
+        type: r.entry.metadata.type,
+        importance: r.entry.metadata.importance,
+        createdAt: r.entry.createdAt,
+        score: r.score,
+      }));
+    } catch (error) {
+      console.error('[MemoryService] Qdrant search error:', error);
+      return [];
+    }
   }
 
   /**
    * Build context from relevant memories for LLM prompt injection
    */
   async buildMemoryContext(userId: string, currentMessage: string): Promise<string | null> {
+    console.log(`[MemoryService] Building memory context for: "${currentMessage.substring(0, 50)}..."`);
+    console.log(`[MemoryService] Vector provider: ${this.vectorProvider}, hasLongTermStore: ${!!this.longTermStore}`);
+
     const relevantMemories = await this.searchMemories(userId, currentMessage, {
-      topK: 10,
-      threshold: 0.6,
+      topK: 15,
+      threshold: 0.5, // Lowered from 0.6 to catch more relevant memories
     });
+
+    console.log(`[MemoryService] Found ${relevantMemories.length} relevant memories`);
 
     if (relevantMemories.length === 0) {
       return null;
     }
+
+    // Log top memories for debugging
+    relevantMemories.slice(0, 3).forEach((m, i) => {
+      console.log(`[MemoryService] Memory ${i + 1}: score=${m.score.toFixed(3)}, type=${m.type}, content="${m.content.substring(0, 80)}..."`);
+    });
 
     // Group by type for better organization
     const facts = relevantMemories.filter((m) => m.type === 'fact');
