@@ -107,26 +107,49 @@ export class ClaudeProvider implements BrainProvider {
     const claudeMessages = this.convertToClaudeMessages(messages);
     const model = options?.model || this.config.model || 'claude-sonnet-4-20250514';
 
+    // Debug logging
+    console.log('[ClaudeProvider] Preparing streaming request:', {
+      model,
+      messageCount: claudeMessages.length,
+      systemPromptLength: systemPrompt.length,
+      firstMessageRole: claudeMessages[0]?.role,
+      lastMessageRole: claudeMessages[claudeMessages.length - 1]?.role,
+    });
+
+    // Validate messages before sending
+    if (claudeMessages.length === 0) {
+      throw new Error('[ClaudeProvider] No messages to send to Claude API');
+    }
+    if (claudeMessages[0]?.role !== 'user') {
+      console.error('[ClaudeProvider] First message is not from user:', claudeMessages[0]);
+      throw new Error('[ClaudeProvider] First message must be from user role');
+    }
+
     const client = this.client;
     const temperature = options?.temperature || this.config.temperature || 0.2;
     const maxTokens = options?.maxTokens || 2048;
 
     const stream = async function* () {
-      const streamResponse = await client.messages.stream({
-        model,
-        max_tokens: maxTokens,
-        temperature,
-        system: systemPrompt,
-        messages: claudeMessages,
-      });
+      try {
+        const streamResponse = await client.messages.stream({
+          model,
+          max_tokens: maxTokens,
+          temperature,
+          system: systemPrompt,
+          messages: claudeMessages,
+        });
 
-      for await (const event of streamResponse) {
-        if (
-          event.type === 'content_block_delta' &&
-          event.delta.type === 'text_delta'
-        ) {
-          yield event.delta.text;
+        for await (const event of streamResponse) {
+          if (
+            event.type === 'content_block_delta' &&
+            event.delta.type === 'text_delta'
+          ) {
+            yield event.delta.text;
+          }
         }
+      } catch (error) {
+        console.error('[ClaudeProvider] Stream error:', error);
+        throw error;
       }
     };
 
