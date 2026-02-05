@@ -159,6 +159,10 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
   const [userPromptConflicts, setUserPromptConflicts] = useState<string[]>([]);
   const [isSavingUserPrompt, setIsSavingUserPrompt] = useState(false);
 
+  // Auto-save state
+  const [showAutoSaveGlow, setShowAutoSaveGlow] = useState<'master' | 'user' | null>(null);
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Conflict detection keywords that users cannot override
   const PROTECTED_KEYWORDS = [
     { keyword: /\bAI\b/i, rule: 'Cannot instruct Zenna to identify as "AI"' },
@@ -723,18 +727,49 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                   <li>"Remind me about my daily medication at 9am"</li>
                 </ul>
 
-                <textarea
-                  value={userPromptDraft}
-                  onChange={(e) => {
-                    setUserPromptDraft(e.target.value);
-                    // Check conflicts in real-time
-                    const conflicts = checkUserPromptConflicts(e.target.value);
-                    setUserPromptConflicts(conflicts);
-                  }}
-                  rows={6}
-                  className="w-full bg-zenna-bg border border-zenna-border rounded-lg p-3 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-zenna-accent"
-                  placeholder="Add your personal preferences and context..."
-                />
+                <div className="relative">
+                  <textarea
+                    value={userPromptDraft}
+                    onChange={(e) => {
+                      setUserPromptDraft(e.target.value);
+                      // Check conflicts in real-time
+                      const conflicts = checkUserPromptConflicts(e.target.value);
+                      setUserPromptConflicts(conflicts);
+                    }}
+                    onBlur={async () => {
+                      // Auto-save on blur if there are changes and no major conflicts
+                      if (userPromptDraft !== settings.personalPrompt) {
+                        const conflicts = checkUserPromptConflicts(userPromptDraft);
+                        try {
+                          await saveSettings({ personalPrompt: userPromptDraft });
+                          setSettings(s => ({ ...s, personalPrompt: userPromptDraft }));
+                          setShowAutoSaveGlow('user');
+                          // Clear glow after 2 seconds
+                          if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+                          autoSaveTimeoutRef.current = setTimeout(() => setShowAutoSaveGlow(null), 2000);
+                          if (conflicts.length > 0) {
+                            setMessage({
+                              type: 'error',
+                              text: `Saved with ${conflicts.length} conflict(s) - conflicting rules will be ignored`
+                            });
+                          }
+                        } catch (e) {
+                          console.error('Auto-save failed:', e);
+                        }
+                      }
+                    }}
+                    rows={6}
+                    className={`w-full bg-zenna-bg border rounded-lg p-3 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-zenna-accent transition-all duration-300 ${
+                      showAutoSaveGlow === 'user' ? 'border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.3)]' : 'border-zenna-border'
+                    }`}
+                    placeholder="Add your personal preferences and context..."
+                  />
+                  {showAutoSaveGlow === 'user' && (
+                    <div className="absolute top-2 right-2 bg-green-500/20 text-green-400 text-xs px-2 py-1 rounded-full animate-pulse">
+                      ✓ Automatically Saved
+                    </div>
+                  )}
+                </div>
 
                 {/* Conflict warnings */}
                 {userPromptConflicts.length > 0 && (
@@ -1346,12 +1381,42 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                     Load Recommended Default
                   </button>
                 </div>
-                <textarea
-                  value={systemPromptDraft}
-                  onChange={(e) => setSystemPromptDraft(e.target.value)}
-                  className="w-full h-96 bg-zenna-bg border border-zenna-border rounded-lg p-3 text-sm text-zenna-text font-mono resize-y focus:outline-none focus:ring-2 focus:ring-zenna-accent"
-                  placeholder="Enter the master system prompt..."
-                />
+                <div className="relative">
+                  <textarea
+                    value={systemPromptDraft}
+                    onChange={(e) => setSystemPromptDraft(e.target.value)}
+                    onBlur={async () => {
+                      // Auto-save on blur if there are changes
+                      if (systemPromptDraft !== masterSettings.systemPrompt && systemPromptDraft.trim()) {
+                        try {
+                          const response = await fetch('/api/settings/master', {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ systemPrompt: systemPromptDraft }),
+                          });
+                          if (response.ok) {
+                            setMasterSettings(prev => ({ ...prev, systemPrompt: systemPromptDraft }));
+                            setShowAutoSaveGlow('master');
+                            // Clear glow after 2 seconds
+                            if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+                            autoSaveTimeoutRef.current = setTimeout(() => setShowAutoSaveGlow(null), 2000);
+                          }
+                        } catch (e) {
+                          console.error('Auto-save failed:', e);
+                        }
+                      }
+                    }}
+                    className={`w-full h-96 bg-zenna-bg border rounded-lg p-3 text-sm text-zenna-text font-mono resize-y focus:outline-none focus:ring-2 focus:ring-zenna-accent transition-all duration-300 ${
+                      showAutoSaveGlow === 'master' ? 'border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.3)]' : 'border-zenna-border'
+                    }`}
+                    placeholder="Enter the master system prompt..."
+                  />
+                  {showAutoSaveGlow === 'master' && (
+                    <div className="absolute top-2 right-2 bg-green-500/20 text-green-400 text-xs px-2 py-1 rounded-full animate-pulse">
+                      ✓ Automatically Saved
+                    </div>
+                  )}
+                </div>
                 <div className="mt-2 flex justify-between items-center">
                   <p className="text-xs text-zenna-muted">
                     {systemPromptDraft.length} characters
