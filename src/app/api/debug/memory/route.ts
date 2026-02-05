@@ -133,7 +133,7 @@ export async function GET() {
       currentUser: {
         internalId: session.user.id,
         email: session.user.email,
-        name: user?.name || session.user.name,
+        name: session.user.name,
       },
       memoryService: {
         vectorProvider: memoryService.getVectorProvider(),

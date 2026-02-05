@@ -26,7 +26,8 @@
       "Bash(python -c:*)",
       "Bash(node:*)",
       "Bash(vercel env ls:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(npm i:*)"
     ]
   }
 }
