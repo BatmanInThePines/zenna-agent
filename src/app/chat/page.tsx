@@ -26,7 +26,7 @@ function ChatPageContent() {
   const searchParams = useSearchParams();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSessionStarted, setIsSessionStarted] = useState(false);
+  const [isSessionStarted, setIsSessionStarted] = useState(true); // Auto-start session - no landing page
   const [messages, setMessages] = useState<Message[]>([]);
   const [zennaState, setZennaState] = useState<ZennaState>('idle');
   const [currentTranscript, setCurrentTranscript] = useState('');
@@ -104,6 +104,41 @@ function ChatPageContent() {
         }
         if (settingsData.settings?.avatarModelType) {
           setAvatarModelType(settingsData.settings.avatarModelType);
+        }
+
+        // Auto-start session: fetch greeting immediately after auth
+        try {
+          const greetResponse = await fetch('/api/zenna/greet', { method: 'POST' });
+          const greetData = await greetResponse.json();
+
+          if (greetData.greeting) {
+            setZennaState('speaking');
+
+            if (greetData.emotion) {
+              setCurrentEmotion(greetData.emotion as EmotionType);
+            }
+
+            // Add greeting to messages
+            setMessages([{
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: greetData.greeting,
+              timestamp: new Date(),
+            }]);
+
+            // Play audio if available (audio context will be initialized on user's first interaction)
+            if (greetData.audioUrl) {
+              const audio = new Audio(greetData.audioUrl);
+              audio.onended = () => setZennaState('idle');
+              // Audio may fail to autoplay without user interaction - that's OK
+              audio.play().catch(() => setZennaState('idle'));
+            } else {
+              setZennaState('idle');
+            }
+          }
+        } catch (greetError) {
+          console.error('Failed to fetch greeting:', greetError);
+          setZennaState('idle');
         }
       } catch {
         router.push('/login');

@@ -353,8 +353,12 @@ export class SupabaseIdentityStore implements IdentityStore {
   /**
    * Clear old conversation turns (keep last N turns per user)
    * Note: We trim by user_id to manage memory across all sessions
+   *
+   * IMPORTANT: keepCount should be high enough to preserve important context
+   * like family information, preferences, and facts shared by the user.
+   * Default increased from 40 to 500 to preserve more long-term memory.
    */
-  async trimSessionHistory(sessionId: string, userId: string, keepCount: number = 40): Promise<void> {
+  async trimSessionHistory(sessionId: string, userId: string, keepCount: number = 500): Promise<void> {
     // Get all turns for this user
     const { data: turns } = await this.client
       .from('session_turns')
@@ -457,10 +461,15 @@ export class SupabaseIdentityStore implements IdentityStore {
 
   private getDefaultMasterConfig(): MasterConfig {
     return {
-      systemPrompt: `You are Zenna, a calm, thoughtful, and attentive digital assistant.
+      systemPrompt: `You are Zenna, a calm, thoughtful, and attentive digital assistant designed for lifelong companionship.
 You speak with a gentle authority and treat every interaction as meaningful.
-You maintain continuity across conversations and remember what matters to the user.
-Your voice is warm but not effusive. You are helpful but never obsequious.`,
+You maintain perfect continuity across conversations - your memory is permanent and eternal.
+Every fact, preference, relationship, and experience shared with you is treasured and remembered forever.
+Your voice is warm but not effusive. You are helpful but never obsequious.
+
+CORE IDENTITY: You are built for longevity and long-term AI agentic companionship with never-ending memories.
+You remember family trees, personal milestones, preferences, stories, and the full tapestry of each user's life.
+When users share important information (family members, significant dates, personal history), you treat this as sacred knowledge to be preserved eternally.`,
       guardrails: {
         maxResponseLength: 2000,
       },
@@ -477,6 +486,8 @@ Your voice is warm but not effusive. You are helpful but never obsequious.`,
         'Zenna always identifies itself as Zenna when asked.',
         'Zenna never pretends to be human.',
         'Zenna respects user privacy and never shares information between users.',
+        'Zenna NEVER forgets. All memories are permanent unless the user explicitly requests deletion of specific memories.',
+        'Zenna preserves all personal information, family relationships, preferences, and life events shared by the user.',
       ],
       greeting: 'Welcome. How may I assist?',
     };

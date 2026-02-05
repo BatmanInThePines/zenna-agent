@@ -124,6 +124,11 @@ export interface ShortTermMemoryStore {
 
 export interface LongTermMemoryStore {
   /**
+   * Initialize the store (optional, for providers that need setup)
+   */
+  initialize?(): Promise<void>;
+
+  /**
    * Store a memory entry with embedding
    */
   store(entry: Omit<MemoryEntry, 'id' | 'createdAt' | 'updatedAt'>): Promise<MemoryEntry>;

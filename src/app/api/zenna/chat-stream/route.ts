@@ -1,16 +1,20 @@
 import { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth';
+import { createMemoryService, MemoryService } from '@/core/services/memory-service';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 import { brainProviderFactory } from '@/core/providers/brain';
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
 
-function getIdentityStore() {
-  return new SupabaseIdentityStore({
-    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    jwtSecret: process.env.AUTH_SECRET!,
-  });
+// Singleton memory service instance
+let memoryServiceInstance: MemoryService | null = null;
+
+async function getMemoryService(): Promise<MemoryService> {
+  if (!memoryServiceInstance) {
+    memoryServiceInstance = createMemoryService();
+    await memoryServiceInstance.initialize();
+  }
+  return memoryServiceInstance;
 }
 
 /**
@@ -24,9 +28,11 @@ function getIdentityStore() {
  * This enables real-time transcript updates before TTS audio is ready.
  */
 export async function POST(request: NextRequest) {
-  const identityStore = getIdentityStore();
-
   try {
+    // Initialize memory service
+    const memoryService = await getMemoryService();
+    const identityStore = memoryService.getIdentityStore();
+
     // Verify authentication using NextAuth
     const session = await auth();
 
@@ -61,9 +67,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Use a session-based ID for conversation history (generate from user ID + date)
-    const sessionId = `${userId}-${new Date().toISOString().split('T')[0]}`;
-    const storedHistory = await identityStore.getSessionHistory(sessionId, userId);
+    // Get conversation history (permanent, never deleted)
+    const storedHistory = await memoryService.getConversationHistory(userId);
 
     // Build message history for LLM
     const systemPrompt = buildSystemPrompt(masterConfig, user.settings);
@@ -71,8 +76,19 @@ export async function POST(request: NextRequest) {
       { role: 'system', content: systemPrompt },
     ];
 
-    // Add stored conversation history
-    for (const turn of storedHistory) {
+    // Inject relevant memories from semantic search (if Pinecone is configured)
+    const memoryContext = await memoryService.buildMemoryContext(userId, message);
+    if (memoryContext) {
+      history.push({
+        role: 'system',
+        content: memoryContext,
+      });
+    }
+
+    // Add recent conversation history (last 50 turns for context window management)
+    // NOTE: All history is preserved permanently, we just limit what we send to LLM
+    const recentHistory = storedHistory.slice(-50);
+    for (const turn of recentHistory) {
       if (turn.role === 'user' || turn.role === 'assistant') {
         history.push({
           role: turn.role,
@@ -89,8 +105,9 @@ export async function POST(request: NextRequest) {
       timestamp: new Date(),
     });
 
-    // Save user message to Supabase
-    await identityStore.addSessionTurn(sessionId, userId, 'user', message);
+    // Save user message to permanent storage (Supabase + Pinecone if configured)
+    // NOTE: Memories are PERMANENT - we never delete them
+    await memoryService.addConversationTurn(userId, 'user', message);
 
     // Get brain provider
     const brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId || 'gemini-2.5-flash';
@@ -143,11 +160,9 @@ export async function POST(request: NextRequest) {
             finalResponse = actionResult.cleanedResponse;
           }
 
-          // Save assistant response to Supabase
-          await identityStore.addSessionTurn(sessionId, userId, 'assistant', finalResponse);
-
-          // Trim old history
-          await identityStore.trimSessionHistory(sessionId, userId, 40);
+          // Save assistant response to permanent storage (Supabase + Pinecone if configured)
+          // NOTE: Memories are PERMANENT - we never delete them unless explicitly requested
+          await memoryService.addConversationTurn(userId, 'assistant', finalResponse);
 
           // Analyze emotion
           const emotion = analyzeEmotion(finalResponse);
