@@ -373,15 +373,48 @@ export class MemoryService {
       return null;
     }
 
+    // CRITICAL FIX: Filter out user questions that just echo back the current query
+    // User questions have high similarity but don't contain useful information
+    // We want ASSISTANT responses and FACTS that contain actual answers
+    const filteredMemories = relevantMemories.filter((m) => {
+      // Keep all facts and preferences - these are important
+      if (m.type === 'fact' || m.type === 'preference') {
+        return true;
+      }
+
+      // For conversations, filter out user questions (they start with question patterns)
+      const content = m.content.toLowerCase();
+      const questionPatterns = [
+        'what is my', 'what\'s my', 'who is my', 'who\'s my',
+        'tell me', 'do you know', 'do you remember', 'can you tell',
+        'what do you know about', 'remind me'
+      ];
+
+      // If it looks like a question the user asked, skip it
+      const isUserQuestion = questionPatterns.some(pattern => content.startsWith(pattern));
+      if (isUserQuestion) {
+        console.log(`[MemoryService] Filtering out user question: "${m.content.substring(0, 50)}..."`);
+        return false;
+      }
+
+      return true;
+    });
+
+    console.log(`[MemoryService] After filtering: ${filteredMemories.length} memories (removed ${relevantMemories.length - filteredMemories.length} user questions)`);
+
+    if (filteredMemories.length === 0) {
+      return null;
+    }
+
     // Log top memories for debugging
-    relevantMemories.slice(0, 3).forEach((m, i) => {
+    filteredMemories.slice(0, 3).forEach((m, i) => {
       console.log(`[MemoryService] Memory ${i + 1}: score=${m.score.toFixed(3)}, type=${m.type}, content="${m.content.substring(0, 80)}..."`);
     });
 
     // Group by type for better organization
-    const facts = relevantMemories.filter((m) => m.type === 'fact');
-    const preferences = relevantMemories.filter((m) => m.type === 'preference');
-    const conversations = relevantMemories.filter((m) => m.type === 'conversation');
+    const facts = filteredMemories.filter((m) => m.type === 'fact');
+    const preferences = filteredMemories.filter((m) => m.type === 'preference');
+    const conversations = filteredMemories.filter((m) => m.type === 'conversation');
 
     let context = 'Relevant information from memory:\n\n';
 
