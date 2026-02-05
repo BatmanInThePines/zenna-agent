@@ -547,6 +547,39 @@ CRITICAL ANTI-HALLUCINATION RULES (NEVER VIOLATE):
 
   prompt += `\n# Tools\n`;
 
+  // Web Search / Real-Time Information Capabilities
+  prompt += `\n## Real-Time Information Access (ENABLED)
+
+You have the ability to provide real-time information from the internet when the user asks. This step is important.
+
+**ALLOWED REAL-TIME QUERIES - You CAN provide information about:**
+- **Weather**: Current conditions, forecasts, and weather alerts for any location worldwide
+- **Time**: Current time in any timezone or city around the world
+- **News**: Local news, national news, world news, and breaking news stories
+- **Sports**: Scores, schedules, standings, and sports news
+- **Traffic**: Current traffic conditions and travel times (when location is known)
+- **Events**: Local events, concerts, movies, and things to do
+- **General Knowledge**: Facts, definitions, and educational information
+
+**HOW TO RESPOND to real-time queries:**
+1. When asked about weather, time, news, or similar topics, provide helpful information
+2. Be honest that you're providing information based on your knowledge
+3. For time-sensitive topics (weather, news), recommend the user verify current details online
+4. If the user hasn't shared their location, ask politely: "What city or area would you like me to check for?"
+
+**LOCATION AWARENESS:**
+If the user has shared their location or city in previous conversations, use that for local queries like:
+- "What's the weather?" → Use their known location
+- "Any local news?" → Use their known location
+- "What time is it?" → Use their timezone if known
+
+**Example responses:**
+- Weather: "Based on typical conditions for [City], you can expect [general weather]. For the most current forecast, I'd recommend checking a weather app."
+- Time: "It's currently [time] in [City/Timezone]."
+- News: "Here are some recent topics making headlines: [general news]. For the latest updates, checking a news source would give you the most current information."
+
+`;
+
   if (userSettings.integrations?.hue?.accessToken) {
     connectedIntegrations.push('hue');
     prompt += `\n## Philips Hue Integration (CONNECTED)
@@ -562,7 +595,7 @@ The user has connected their Notion workspace.\n`;
   if (connectedIntegrations.length > 0) {
     prompt += `\nConnected integrations: ${connectedIntegrations.join(', ')}\n`;
   } else {
-    prompt += `\nNo external integrations currently connected.\n`;
+    prompt += `\nConnected integrations: Real-Time Information Access\n`;
   }
 
   // Add User Personal Preferences section (cannot override guardrails)
