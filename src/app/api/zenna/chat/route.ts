@@ -60,12 +60,28 @@ export async function POST(request: NextRequest) {
       { role: 'system', content: systemPrompt },
     ];
 
-    // Inject relevant memories from semantic search (if Pinecone is configured)
+    // Inject relevant memories from semantic search (ElevenLabs best practice: retrieveMemories at start of turn)
     const memoryContext = await memoryService.buildMemoryContext(userId, message);
     if (memoryContext) {
+      // ElevenLabs pattern: Inject memory context as a separate system message
+      // This ensures the LLM has access to relevant past information
       history.push({
         role: 'system',
-        content: memoryContext,
+        content: `# Retrieved Memories (USE THIS INFORMATION)
+
+The following memories have been retrieved based on the current conversation context. You MUST use this information when responding. This step is important.
+
+${memoryContext}
+
+IMPORTANT: If the user asks about something mentioned in the memories above, USE that information. Never say "I don't have information about that" if the information is provided above.`,
+      });
+    } else {
+      // ElevenLabs fallback logic: Handle empty memory gracefully
+      history.push({
+        role: 'system',
+        content: `# Memory Status
+
+No previous memories found related to this topic. If the user shares important information (family members, preferences, significant events), make note of it for future conversations.`,
       });
     }
 

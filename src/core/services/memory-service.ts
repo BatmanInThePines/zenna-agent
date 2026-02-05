@@ -462,12 +462,17 @@ export class MemoryService {
 export function createMemoryService(): MemoryService {
   // Determine embedding provider - prefer Gemini for cost savings and our Qdrant uses Gemini embeddings (768 dim)
   // Can be overridden with EMBEDDING_PROVIDER env var
-  const embeddingProvider = (process.env.EMBEDDING_PROVIDER as 'openai' | 'gemini') || 'gemini';
+  // IMPORTANT: Trim the value to handle any newline/whitespace issues from Vercel env vars
+  const rawEmbeddingProvider = process.env.EMBEDDING_PROVIDER?.trim()?.toLowerCase();
+  const embeddingProvider: 'openai' | 'gemini' = rawEmbeddingProvider === 'openai' ? 'openai' : 'gemini';
   const embeddingApiKey = embeddingProvider === 'gemini'
     ? process.env.GOOGLE_AI_API_KEY
     : process.env.OPENAI_API_KEY;
 
-  console.log('[MemoryService] Creating service with embedding provider:', embeddingProvider);
+  console.log('[MemoryService] Creating service with:');
+  console.log('[MemoryService]   - Raw EMBEDDING_PROVIDER:', JSON.stringify(process.env.EMBEDDING_PROVIDER));
+  console.log('[MemoryService]   - Parsed provider:', embeddingProvider);
+  console.log('[MemoryService]   - Has embedding API key:', !!embeddingApiKey);
 
   return new MemoryService({
     supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
