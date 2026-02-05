@@ -131,7 +131,11 @@ function ChatPageContent() {
             // Play audio if available (audio context will be initialized on user's first interaction)
             if (greetData.audioUrl) {
               const audio = new Audio(greetData.audioUrl);
-              audio.onended = () => setZennaState('idle');
+              audio.onended = () => {
+                setZennaState('idle');
+                // Auto-enable always-listening after greeting completes
+                setAlwaysListening(true);
+              };
 
               // Try to play - if blocked by browser autoplay policy, show prompt
               audio.play().catch(() => {
@@ -142,6 +146,8 @@ function ChatPageContent() {
               });
             } else {
               setZennaState('idle');
+              // Even without audio, enable always-listening after auth check completes
+              setAlwaysListening(true);
             }
           }
         } catch (greetError) {
@@ -1173,13 +1179,37 @@ function ChatPageContent() {
             if (pendingGreetingAudio) {
               setZennaState('speaking');
               const audio = new Audio(pendingGreetingAudio);
-              audio.onended = () => setZennaState('idle');
-              audio.onerror = () => setZennaState('idle');
+
+              // When greeting finishes, enable always-listening mode by default
+              audio.onended = () => {
+                setZennaState('idle');
+                // Enable always-listening mode after greeting completes
+                setAlwaysListening(true);
+                // Start listening after a short delay
+                setTimeout(() => {
+                  startAlwaysListening();
+                }, 500);
+              };
+
+              audio.onerror = () => {
+                setZennaState('idle');
+                // Still enable always-listening even if audio fails
+                setAlwaysListening(true);
+                setTimeout(() => {
+                  startAlwaysListening();
+                }, 500);
+              };
+
               try {
                 await audio.play();
               } catch (err) {
                 console.error('Still failed to play audio:', err);
                 setZennaState('idle');
+                // Enable always-listening even on error
+                setAlwaysListening(true);
+                setTimeout(() => {
+                  startAlwaysListening();
+                }, 500);
               }
               setPendingGreetingAudio(null);
             }
@@ -1192,7 +1222,7 @@ function ChatPageContent() {
               Click anywhere to hear Zenna&apos;s greeting
             </p>
             <div className="text-sm text-zenna-muted/70">
-              (Browsers require user interaction to play audio)
+              (Voice mode will activate after greeting)
             </div>
           </div>
         </div>

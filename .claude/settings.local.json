@@ -25,7 +25,8 @@
       "Bash(curl:*)",
       "Bash(python -c:*)",
       "Bash(node:*)",
-      "Bash(vercel env ls:*)"
+      "Bash(vercel env ls:*)",
+      "Bash(dir:*)"
     ]
   }
 }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { UserManagementDashboard } from './admin/UserManagementDashboard';
+import { AvatarPresetManager } from './admin/AvatarPresetManager';
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -1140,122 +1141,29 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                 </p>
               </div>
 
-              {/* 3D Avatar Presets Management */}
+              {/* 3D Avatar Presets Management - Visual Gallery */}
               <div className="glass-card p-4">
                 <h3 className="text-sm font-medium mb-3 flex items-center">
-                  3D Avatar Presets
+                  3D Avatar Preset Management
                   <InfoTooltip
                     title="Avatar Presets"
-                    description="Define the 3D avatar options available to all users. Each preset needs a GLB model URL."
-                    howTo="Upload GLB models to Supabase Storage or use external URLs."
+                    description="Select from all created avatars to assign as presets. Click any avatar to set it as default or assign to a preset slot."
+                    howTo="Click on an avatar thumbnail to see assignment options."
                   />
                 </h3>
 
-                <p className="text-xs text-zenna-muted mb-4">
-                  Configure the default 3D avatar options that all users can choose from.
-                </p>
-
-                {/* Current presets list */}
-                <div className="space-y-3 mb-4">
-                  {(masterSettings.avatarPresets || []).map((preset, index) => (
-                    <div key={preset.id} className="flex items-center gap-3 p-2 bg-zenna-bg/50 rounded-lg">
-                      <div className="w-12 h-12 rounded-lg overflow-hidden bg-zenna-surface flex-shrink-0">
-                        {preset.thumbnailUrl ? (
-                          <img src={preset.thumbnailUrl} alt={preset.name} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-zenna-muted text-xs">3D</div>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{preset.name}</p>
-                        <p className="text-xs text-zenna-muted truncate">{preset.modelUrl}</p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          const updated = (masterSettings.avatarPresets || []).filter((_, i) => i !== index);
-                          setMasterSettings({ ...masterSettings, avatarPresets: updated });
-                          // Save immediately
-                          fetch('/api/settings/master', {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ avatarPresets: updated }),
-                          });
-                        }}
-                        className="text-red-400 hover:text-red-300 text-xs px-2"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-
-                  {(!masterSettings.avatarPresets || masterSettings.avatarPresets.length === 0) && (
-                    <p className="text-xs text-zenna-muted text-center py-4">
-                      No presets configured. Add presets below.
-                    </p>
-                  )}
-                </div>
-
-                {/* Add new preset form */}
-                <div className="border-t border-zenna-border pt-4">
-                  <p className="text-xs text-zenna-muted mb-2">Add New Preset</p>
-                  <div className="space-y-2">
-                    <input
-                      type="text"
-                      placeholder="Preset name (e.g., 'Zenna Classic')"
-                      className="input-field text-sm"
-                      id="new-preset-name"
-                    />
-                    <input
-                      type="url"
-                      placeholder="GLB model URL"
-                      className="input-field text-sm"
-                      id="new-preset-url"
-                    />
-                    <input
-                      type="url"
-                      placeholder="Thumbnail URL (optional)"
-                      className="input-field text-sm"
-                      id="new-preset-thumb"
-                    />
-                    <button
-                      onClick={() => {
-                        const nameInput = document.getElementById('new-preset-name') as HTMLInputElement;
-                        const urlInput = document.getElementById('new-preset-url') as HTMLInputElement;
-                        const thumbInput = document.getElementById('new-preset-thumb') as HTMLInputElement;
-
-                        if (!nameInput.value || !urlInput.value) {
-                          setMessage({ type: 'error', text: 'Name and Model URL are required' });
-                          return;
-                        }
-
-                        const newPreset: AvatarPreset = {
-                          id: `preset-${Date.now()}`,
-                          name: nameInput.value,
-                          modelUrl: urlInput.value,
-                          thumbnailUrl: thumbInput.value || undefined,
-                        };
-
-                        const updated = [...(masterSettings.avatarPresets || []), newPreset];
-                        setMasterSettings({ ...masterSettings, avatarPresets: updated });
-
-                        // Save immediately
-                        fetch('/api/settings/master', {
-                          method: 'PATCH',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ avatarPresets: updated }),
-                        }).then(() => {
-                          setMessage({ type: 'success', text: 'Preset added!' });
-                          nameInput.value = '';
-                          urlInput.value = '';
-                          thumbInput.value = '';
-                        });
-                      }}
-                      className="btn-primary text-sm w-full"
-                    >
-                      Add Preset
-                    </button>
-                  </div>
-                </div>
+                <AvatarPresetManager
+                  onPresetChange={() => {
+                    // Refresh master settings when presets change
+                    fetch('/api/settings/master').then(res => res.json()).then(data => {
+                      setMasterSettings(prev => ({
+                        ...prev,
+                        avatarPresets: data.avatarPresets || [],
+                        defaultAvatarUrl: data.defaultAvatarUrl,
+                      }));
+                    });
+                  }}
+                />
               </div>
 
               {/* System Prompt Placeholder */}
