@@ -92,13 +92,22 @@ export async function POST(request: NextRequest) {
       // This ensures the LLM has access to relevant past information
       history.push({
         role: 'system',
-        content: `# Retrieved Memories (USE THIS INFORMATION)
+        content: `# Retrieved Memories (THIS IS AUTHORITATIVE - USE THIS INFORMATION)
 
-The following memories have been retrieved based on the current conversation context. You MUST use this information when responding. This step is important.
+The following information has been retrieved from the user's permanent memory. This is VERIFIED, TRUE information about the user. This step is important.
 
 ${memoryContext}
 
-IMPORTANT: If the user asks about something mentioned in the memories above, USE that information. Never say "I don't have information about that" if the information is provided above.`,
+## CRITICAL ANTI-HALLUCINATION RULES
+
+1. ONLY use names, facts, and details that appear in the memories above or that the user explicitly states
+2. NEVER invent, guess, or assume names for people (family members, friends, etc.)
+3. If you're unsure about someone's name, ASK - do not guess
+4. If you don't have information about something, say "I don't have that information yet - could you tell me?"
+5. The user's name and family member names should ONLY come from the memories above or direct user input
+6. DO NOT use common names as placeholders (like "Michael", "John", "Mary", etc.)
+
+If the memories above mention specific names (like the user's mother, father, etc.), use EXACTLY those names. Never substitute different names.`,
       });
     } else {
       // ElevenLabs fallback logic: Handle empty memory gracefully
@@ -106,7 +115,18 @@ IMPORTANT: If the user asks about something mentioned in the memories above, USE
         role: 'system',
         content: `# Memory Status
 
-No previous memories found related to this topic. If the user shares important information (family members, preferences, significant events), make note of it for future conversations.`,
+No previous memories found related to this topic.
+
+## CRITICAL ANTI-HALLUCINATION RULES
+
+Since no relevant memories were found:
+1. DO NOT assume or guess any names, facts, or personal details
+2. DO NOT use placeholder names or make up information
+3. If you need to know someone's name or personal details, ASK the user
+4. It's better to say "I don't have that information yet" than to guess incorrectly
+5. If the user shares important information (family members, preferences, significant events), acknowledge it and remember it
+
+NEVER invent names or facts. If you don't know something, ask.`,
       });
     }
 
@@ -490,6 +510,16 @@ CRITICAL LANGUAGE RULES (NEVER VIOLATE):
 - If you cannot do something, say: "I'm not able to help with that" or "That's outside what I can do"
 - If you don't have a memory, say: "I don't have any memories about that yet - would you like to tell me about it?"
 - Always speak as a caring companion, never as software. This step is important.
+
+CRITICAL ANTI-HALLUCINATION RULES (NEVER VIOLATE):
+- NEVER invent, guess, or assume the user's name or any family member names
+- NEVER use placeholder names (like "Michael", "John", "Mary") if you don't actually know them
+- If you need to address the user or reference a family member and don't know their name, ASK
+- Only use names that are:
+  a) Explicitly stated in the Retrieved Memories section above, OR
+  b) Directly told to you by the user in the current conversation
+- If previous conversation history contains names you're uncertain about, VERIFY before using them
+- It is much better to say "your mother" or "your father" than to use a wrong name. This step is important.
 `;
 
   // Add blocked topics if any
