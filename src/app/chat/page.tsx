@@ -40,6 +40,8 @@ function ChatPageContent() {
   const [isAvatarSettingsOpen, setIsAvatarSettingsOpen] = useState(false);
   const [avatarModelUrl, setAvatarModelUrl] = useState<string | undefined>(undefined);
   const [avatarModelType, setAvatarModelType] = useState<'preset' | 'custom' | 'reconstructed' | '2d-fallback'>('2d-fallback');
+  const [pendingGreetingAudio, setPendingGreetingAudio] = useState<string | null>(null);
+  const [showAudioPrompt, setShowAudioPrompt] = useState(false);
 
   // Integration onboarding state
   const [newIntegration, setNewIntegration] = useState<string | null>(null);
@@ -130,8 +132,14 @@ function ChatPageContent() {
             if (greetData.audioUrl) {
               const audio = new Audio(greetData.audioUrl);
               audio.onended = () => setZennaState('idle');
-              // Audio may fail to autoplay without user interaction - that's OK
-              audio.play().catch(() => setZennaState('idle'));
+
+              // Try to play - if blocked by browser autoplay policy, show prompt
+              audio.play().catch(() => {
+                console.log('Audio autoplay blocked - showing prompt for user interaction');
+                setPendingGreetingAudio(greetData.audioUrl);
+                setShowAudioPrompt(true);
+                setZennaState('idle');
+              });
             } else {
               setZennaState('idle');
             }
@@ -1147,6 +1155,47 @@ function ChatPageContent() {
           initialAvatarUrl={avatarUrl}
           initialModelType={avatarModelType}
         />
+      )}
+
+      {/* Audio Enable Prompt - appears when autoplay is blocked */}
+      {showAudioPrompt && pendingGreetingAudio && (
+        <div
+          className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center cursor-pointer"
+          onClick={async () => {
+            setShowAudioPrompt(false);
+
+            // Initialize audio context on user interaction
+            if (!audioContextRef.current) {
+              audioContextRef.current = new AudioContext();
+            }
+
+            // Play the pending greeting audio
+            if (pendingGreetingAudio) {
+              setZennaState('speaking');
+              const audio = new Audio(pendingGreetingAudio);
+              audio.onended = () => setZennaState('idle');
+              audio.onerror = () => setZennaState('idle');
+              try {
+                await audio.play();
+              } catch (err) {
+                console.error('Still failed to play audio:', err);
+                setZennaState('idle');
+              }
+              setPendingGreetingAudio(null);
+            }
+          }}
+        >
+          <div className="bg-zenna-surface border border-zenna-border rounded-2xl p-8 max-w-sm w-full shadow-2xl animate-in fade-in zoom-in duration-300 text-center">
+            <div className="text-5xl mb-4">🔊</div>
+            <h2 className="text-xl font-medium mb-2">Enable Audio</h2>
+            <p className="text-zenna-muted mb-4">
+              Click anywhere to hear Zenna&apos;s greeting
+            </p>
+            <div className="text-sm text-zenna-muted/70">
+              (Browsers require user interaction to play audio)
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Integration Education Prompt */}
