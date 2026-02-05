@@ -84,14 +84,16 @@ function ChatPageContent() {
 
         setIsAuthenticated(true);
 
-        // Load avatar settings (user's personal avatar or master default)
-        const [settingsRes, avatarRes] = await Promise.all([
+        // Load avatar settings, and conversation history in parallel
+        const [settingsRes, avatarRes, historyRes] = await Promise.all([
           fetch('/api/settings'),
           fetch('/api/settings/avatar'),
+          fetch('/api/zenna/history?limit=100'),
         ]);
 
         const settingsData = await settingsRes.json();
         const avatarData = await avatarRes.json();
+        const historyData = await historyRes.json();
 
         // Use personal avatar if set, otherwise use master default
         if (settingsData.settings?.avatarUrl) {
@@ -108,7 +110,21 @@ function ChatPageContent() {
           setAvatarModelType(settingsData.settings.avatarModelType);
         }
 
+        // Load conversation history from database
+        // This ensures messages persist across page refreshes and sessions
+        if (historyData.messages && historyData.messages.length > 0) {
+          console.log(`[Chat] Loaded ${historyData.messages.length} messages from history`);
+          const loadedMessages: Message[] = historyData.messages.map((msg: { id: string; role: 'user' | 'assistant'; content: string; timestamp: string }) => ({
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            timestamp: new Date(msg.timestamp),
+          }));
+          setMessages(loadedMessages);
+        }
+
         // Auto-start session: fetch greeting immediately after auth
+        // But only if there's no existing conversation history
         try {
           const greetResponse = await fetch('/api/zenna/greet', { method: 'POST' });
           const greetData = await greetResponse.json();
@@ -120,13 +136,16 @@ function ChatPageContent() {
               setCurrentEmotion(greetData.emotion as EmotionType);
             }
 
-            // Add greeting to messages
-            setMessages([{
-              id: crypto.randomUUID(),
-              role: 'assistant',
-              content: greetData.greeting,
-              timestamp: new Date(),
-            }]);
+            // Only add greeting if no history exists (new user or cleared history)
+            // This prevents duplicate greetings when returning to an existing conversation
+            if (!historyData.messages || historyData.messages.length === 0) {
+              setMessages([{
+                id: crypto.randomUUID(),
+                role: 'assistant',
+                content: greetData.greeting,
+                timestamp: new Date(),
+              }]);
+            }
 
             // Play audio if available (audio context will be initialized on user's first interaction)
             if (greetData.audioUrl) {
