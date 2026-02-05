@@ -208,6 +208,35 @@ export function useVoiceConversation(
       setTranscript(userText);
       callbacksRef.current.onTranscript?.(userText);
 
+      // Check for voice commands BEFORE sending to LLM
+      const lowerText = userText.toLowerCase();
+      const muteCommands = [
+        'stop listening',
+        'hang up',
+        'mute',
+        'mute the microphone',
+        'stop',
+        'pause',
+        'go away',
+        'shut up',
+        'be quiet',
+        'silence',
+      ];
+
+      if (muteCommands.some(cmd => lowerText.includes(cmd))) {
+        // User wants to mute - stop listening and go to idle
+        setTranscript('');
+        updateState('idle');
+        // Stop VAD if in always-listening mode
+        if (configRef.current.alwaysListening) {
+          vad.stopListening();
+          configRef.current = { ...configRef.current, alwaysListening: false };
+        }
+        // Notify callback that we're muting
+        callbacksRef.current.onResponse?.("I have gone on mute, unmute me when ready.", 'calming');
+        return;
+      }
+
       // Get response
       await getResponse(userText);
     } catch (error) {
