@@ -54,6 +54,15 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Check for background noise system message
+    const isBackgroundNoiseMessage = message.startsWith('[SYSTEM: Background noise');
+    let processedMessage = message;
+
+    if (isBackgroundNoiseMessage) {
+      // Transform system message into a natural response request
+      processedMessage = "I'm detecting some background noise. Please acknowledge this briefly and let me know you'll wait for me to speak clearly. Keep it to one short sentence.";
+    }
+
     // Get user and master config
     const [user, masterConfig] = await Promise.all([
       identityStore.getUser(userId),
@@ -98,16 +107,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Add current user message
+    // Add current user message (use processed message for background noise handling)
     history.push({
       role: 'user',
-      content: message,
+      content: processedMessage,
       timestamp: new Date(),
     });
 
     // Save user message to permanent storage (Supabase + Pinecone if configured)
     // NOTE: Memories are PERMANENT - we never delete them
-    await memoryService.addConversationTurn(userId, 'user', message);
+    // Don't save system messages like background noise detection
+    if (!isBackgroundNoiseMessage) {
+      await memoryService.addConversationTurn(userId, 'user', message);
+    }
 
     // Get brain provider
     const brainProviderId = user.settings.preferredBrainProvider || masterConfig.defaultBrain.providerId || 'gemini-2.5-flash';

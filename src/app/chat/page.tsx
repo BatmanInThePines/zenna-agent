@@ -555,6 +555,12 @@ function ChatPageContent() {
       silenceStartRef.current = 0;
       isSpeakingRef.current = false;
 
+      // Background noise detection variables
+      let backgroundNoiseStartTime = 0;
+      let hasDetectedSpeechThisSession = false;
+      let rmsHistory: number[] = [];
+      const RMS_HISTORY_SIZE = 30; // ~1.5 seconds of history at 50ms intervals
+
       // Start recording
       audioChunksRef.current = [];
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -569,7 +575,7 @@ function ChatPageContent() {
       mediaRecorder.start(100);
       setZennaState('listening');
 
-      // VAD loop
+      // VAD loop with background noise detection
       vadIntervalRef.current = setInterval(() => {
         if (!analyserRef.current) return;
 
@@ -583,18 +589,38 @@ function ChatPageContent() {
         const rms = Math.sqrt(sum / dataArray.length);
         setAudioLevel(Math.min(1, rms * 10));
 
-        const threshold = 0.01;
+        // Track RMS history for noise detection
+        rmsHistory.push(rms);
+        if (rmsHistory.length > RMS_HISTORY_SIZE) {
+          rmsHistory.shift();
+        }
+
+        const speechThreshold = 0.015; // Higher threshold for actual speech
+        const noiseThreshold = 0.005;  // Lower threshold for any sound
         const now = Date.now();
 
-        if (rms > threshold) {
+        // Check for actual speech (higher energy bursts with variation)
+        const avgRms = rmsHistory.reduce((a, b) => a + b, 0) / rmsHistory.length;
+        const maxRms = Math.max(...rmsHistory);
+        const minRms = Math.min(...rmsHistory);
+        const rmsVariance = maxRms - minRms;
+
+        // Speech typically has higher peaks and more variation
+        const looksLikeSpeech = rms > speechThreshold && rmsVariance > 0.01;
+
+        if (looksLikeSpeech) {
           isSpeakingRef.current = true;
+          hasDetectedSpeechThisSession = true;
           silenceStartRef.current = 0;
+          backgroundNoiseStartTime = 0; // Reset noise timer
         } else if (isSpeakingRef.current) {
+          // After speech was detected, check for silence
           if (!silenceStartRef.current) {
             silenceStartRef.current = now;
           } else if (now - silenceStartRef.current > 1200) {
-            // 1.2 seconds of silence - process the audio
+            // 1.2 seconds of silence after speech - process the audio
             isSpeakingRef.current = false;
+            hasDetectedSpeechThisSession = false;
 
             // Stop recording and process
             if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
@@ -641,6 +667,36 @@ function ChatPageContent() {
               }, 200);
             }
           }
+        } else if (rms > noiseThreshold && !looksLikeSpeech && !hasDetectedSpeechThisSession) {
+          // Detecting constant noise without speech patterns
+          if (!backgroundNoiseStartTime) {
+            backgroundNoiseStartTime = now;
+          } else if (now - backgroundNoiseStartTime > 5000) {
+            // 5 seconds of continuous background noise without speech
+            console.log('[VAD] Background noise detected for 5 seconds');
+            backgroundNoiseStartTime = 0; // Reset
+
+            // Stop recording
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+              mediaRecorderRef.current.stop();
+            }
+
+            // Stop VAD
+            if (vadIntervalRef.current) {
+              clearInterval(vadIntervalRef.current);
+              vadIntervalRef.current = null;
+            }
+
+            // Send background noise message to Zenna
+            setZennaState('thinking');
+            setCurrentTranscript('');
+
+            // Have Zenna respond about background noise
+            handleUserMessage('[SYSTEM: Background noise detected for extended period without clear speech]');
+          }
+        } else {
+          // Silence - reset noise timer
+          backgroundNoiseStartTime = 0;
         }
       }, 50);
     } catch (error) {
@@ -679,6 +735,20 @@ function ChatPageContent() {
       setZennaState('idle');
     }
   }, [zennaState, startAlwaysListening, stopAlwaysListening]);
+
+  // Auto-start listening when alwaysListening is enabled and state is idle
+  // This handles the case when setAlwaysListening(true) is called but
+  // startAlwaysListening() runs before state updates
+  useEffect(() => {
+    if (alwaysListening && zennaState === 'idle' && !vadIntervalRef.current) {
+      console.log('[AlwaysListening] Auto-starting mic because alwaysListening is enabled');
+      // Small delay to ensure audio context is ready
+      const timer = setTimeout(() => {
+        startAlwaysListening();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [alwaysListening, zennaState, startAlwaysListening]);
 
   // Handle microphone button click - record with VAD-based end-of-speech detection
   const handleMicClick = useCallback(async () => {
