@@ -158,22 +158,59 @@ No previous memories found related to this topic. If the user shares important i
 
     const stream = new ReadableStream({
       async start(controller) {
+        // Timeout handling - send "thinking longer" message after 10 seconds
+        const THINKING_TIMEOUT_MS = 10000;
+        const HARD_TIMEOUT_MS = 30000;
+        let thinkingTimeoutSent = false;
+        let responseStarted = false;
+        const startTime = Date.now();
+
+        const thinkingTimeout = setTimeout(() => {
+          if (!responseStarted) {
+            thinkingTimeoutSent = true;
+            const thinkingEvent = `data: ${JSON.stringify({
+              type: 'thinking',
+              content: "I'm taking a moment to think about this carefully..."
+            })}\n\n`;
+            controller.enqueue(encoder.encode(thinkingEvent));
+          }
+        }, THINKING_TIMEOUT_MS);
+
         try {
+          // Create a promise that rejects after hard timeout
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Response timeout')), HARD_TIMEOUT_MS);
+          });
+
           // Check if provider supports streaming
           if ('generateResponseStream' in brainProvider && typeof brainProvider.generateResponseStream === 'function') {
-            // Use streaming response
+            // Use streaming response with timeout
             const responseStream = brainProvider.generateResponseStream(history);
 
             for await (const chunk of responseStream) {
+              if (!responseStarted) {
+                responseStarted = true;
+                clearTimeout(thinkingTimeout);
+              }
               fullResponse += chunk;
 
               // Send text chunk
               const event = `data: ${JSON.stringify({ type: 'text', content: chunk })}\n\n`;
               controller.enqueue(encoder.encode(event));
+
+              // Check hard timeout during streaming
+              if (Date.now() - startTime > HARD_TIMEOUT_MS) {
+                throw new Error('Response timeout');
+              }
             }
           } else {
-            // Fall back to non-streaming
-            const response = await brainProvider.generateResponse(history);
+            // Fall back to non-streaming with timeout
+            const response = await Promise.race([
+              brainProvider.generateResponse(history),
+              timeoutPromise
+            ]);
+            responseStarted = true;
+            clearTimeout(thinkingTimeout);
             fullResponse = response.content;
 
             // Send complete response
@@ -190,7 +227,13 @@ No previous memories found related to this topic. If the user shares important i
 
           // Save assistant response to permanent storage (Supabase + Pinecone if configured)
           // NOTE: Memories are PERMANENT - we never delete them unless explicitly requested
-          await memoryService.addConversationTurn(userId, 'assistant', finalResponse);
+          // Wrap in try-catch to prevent save errors from breaking the response
+          try {
+            await memoryService.addConversationTurn(userId, 'assistant', finalResponse);
+          } catch (saveError) {
+            console.error('Error saving assistant response:', saveError);
+            // Continue - don't fail the response just because save failed
+          }
 
           // Analyze emotion
           const emotion = analyzeEmotion(finalResponse);
@@ -205,10 +248,20 @@ No previous memories found related to this topic. If the user shares important i
 
           controller.close();
         } catch (error) {
+          clearTimeout(thinkingTimeout);
           console.error('Streaming error:', error);
+
+          // Provide user-friendly error message
+          let errorMessage = "I apologize, but I'm having trouble responding right now.";
+          if (error instanceof Error && error.message === 'Response timeout') {
+            errorMessage = "I'm sorry, I'm taking longer than expected. Please try again in a moment.";
+          } else if (error instanceof Error && error.message.includes('429')) {
+            errorMessage = "I'm receiving a lot of requests right now. Please give me a moment and try again.";
+          }
+
           const errorEvent = `data: ${JSON.stringify({
             type: 'error',
-            error: 'Failed to generate response',
+            error: errorMessage,
           })}\n\n`;
           controller.enqueue(encoder.encode(errorEvent));
           controller.close();

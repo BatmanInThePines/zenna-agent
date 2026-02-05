@@ -180,17 +180,20 @@ export class MemoryService {
   /**
    * Get conversation history from Supabase (all turns for user)
    * NOTE: This does NOT delete any history - memories are permanent
+   * NOTE: sessionId is just used for grouping - we query by userId for full history
    */
   async getConversationHistory(
     userId: string
   ): Promise<Array<{ role: string; content: string; created_at: string }>> {
-    const sessionId = `${userId}-${new Date().toISOString().split('T')[0]}`;
+    // Use a deterministic session ID based on userId only (not date)
+    // The identity store queries by userId anyway, so this is just for legacy compatibility
+    const sessionId = userId;
     return this.identityStore.getSessionHistory(sessionId, userId);
   }
 
   /**
    * Add a conversation turn to permanent storage
-   * Stores in both Supabase (structured) and Pinecone (semantic search)
+   * Stores in both Supabase (structured) and vector store (semantic search)
    */
   async addConversationTurn(
     userId: string,
@@ -202,7 +205,9 @@ export class MemoryService {
       topic?: string;
     }
   ): Promise<void> {
-    const sessionId = `${userId}-${new Date().toISOString().split('T')[0]}`;
+    // Use userId as sessionId - the session_turns table expects UUID format
+    // Appending date to UUID creates invalid UUID format
+    const sessionId = userId;
 
     // Always store in Supabase (structured, queryable)
     await this.identityStore.addSessionTurn(sessionId, userId, role, content);
