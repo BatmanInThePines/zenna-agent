@@ -130,6 +130,50 @@ export class SupabaseIdentityStore implements IdentityStore {
     return this.mapUser(data);
   }
 
+  /**
+   * Create a headless user for product integrations (e.g., 360Aware)
+   * These users don't have passwords - they authenticate via the product app
+   */
+  async createHeadlessUser(
+    externalUserId: string,
+    productId: string,
+    settings: Partial<UserSettings> = {}
+  ): Promise<User> {
+    // Use a deterministic ID based on product + external user ID
+    const userId = `${productId}_${externalUserId}`;
+
+    // Check if already exists
+    const existing = await this.getUser(userId);
+    if (existing) {
+      return existing;
+    }
+
+    const { data, error } = await this.client
+      .from('users')
+      .insert({
+        id: userId,
+        username: `${productId}_user_${externalUserId.substring(0, 8)}`,
+        password_hash: '', // No password for headless users
+        role: 'user',
+        settings: {
+          personalPrompt: '',
+          preferredBrainProvider: 'claude',
+          ...settings,
+        },
+        is_headless: true,
+        linked_product_id: productId,
+        linked_user_id: externalUserId,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to create headless user: ${error.message}`);
+    }
+
+    return this.mapUser(data);
+  }
+
   async authenticate(
     username: string,
     password: string

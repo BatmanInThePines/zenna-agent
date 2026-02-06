@@ -90,15 +90,10 @@ export async function POST(request: NextRequest) {
     if (!user && productContext?.productId) {
       console.log(`[Chat] Creating headless user for ${productContext.productId}: ${userId}`);
       try {
-        user = await identityStore.createUser({
-          id: userId,
-          email: `${productContext.productId}_${userId}@headless.local`,
-          settings: {
-            personalPrompt: '',
-            preferredBrainProvider: 'claude',
-          },
-        });
-        console.log(`[Chat] Headless user created: ${userId}`);
+        // Cast to access the createHeadlessUser method
+        const supabaseStore = identityStore as import('@/core/providers/identity/supabase-identity').SupabaseIdentityStore;
+        user = await supabaseStore.createHeadlessUser(userId, productContext.productId);
+        console.log(`[Chat] Headless user created: ${user.id}`);
       } catch (createError) {
         console.error('[Chat] Failed to create headless user:', createError);
         return NextResponse.json({ error: 'Failed to create user account' }, { status: 500 });
