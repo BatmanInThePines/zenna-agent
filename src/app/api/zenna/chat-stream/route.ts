@@ -264,7 +264,11 @@ NEVER invent names or facts. If you don't know something, ask.`,
           // NOTE: Memories are PERMANENT - we never delete them unless explicitly requested
           // Wrap in try-catch to prevent save errors from breaking the response
           try {
-            await memoryService.addConversationTurn(userId, 'assistant', finalResponse);
+            const isHueRelated = actionResult?.actionConfirmation !== undefined &&
+              fullResponse.includes('control_lights');
+            await memoryService.addConversationTurn(userId, 'assistant', finalResponse,
+              isHueRelated ? { tags: ['Smart Home', 'Hue'], topic: 'smart-home-control' } : undefined
+            );
           } catch (saveError) {
             console.error('Error saving assistant response:', saveError);
             // Continue - don't fail the response just because save failed
@@ -363,6 +367,38 @@ async function processActionBlocks(
         });
 
         actionConfirmation = `I've set up a ${scheduleType} schedule to ${actionData.actionId === 'turn-on' ? 'turn on' : actionData.actionId === 'turn-off' ? 'turn off' : 'control'} your ${actionData.parameters?.target || 'lights'} at ${actionData.time}.`;
+
+        // Tag schedule creation in memory
+        try {
+          const ms = await getMemoryService();
+          await ms.addConversationTurn(userId, 'system', `[Hue Schedule] ${actionConfirmation}`, {
+            tags: ['Smart Home', 'Hue'],
+            topic: 'smart-home-control',
+          });
+        } catch { /* non-fatal */ }
+      } else if (actionData.action === 'control_lights') {
+        const hueConfig = userSettings.integrations?.hue;
+        if (hueConfig?.accessToken) {
+          try {
+            const result = await executeHueCommand(hueConfig, actionData);
+            actionConfirmation = `Done! I've ${result}.`;
+
+            // Tag light control in memory
+            try {
+              const ms = await getMemoryService();
+              await ms.addConversationTurn(userId, 'system', `[Hue Action] ${result}`, {
+                tags: ['Smart Home', 'Hue'],
+                topic: 'smart-home-control',
+              });
+            } catch { /* non-fatal */ }
+          } catch (hueError) {
+            console.error('Hue command failed:', hueError);
+            const errorMsg = hueError instanceof Error ? hueError.message : 'unknown error';
+            actionConfirmation = `I had trouble controlling the lights: ${errorMsg.replace(/^HUE_\w+:\s*/, '')}`;
+          }
+        } else {
+          actionConfirmation = `I'd love to help with the lights, but the Hue connection needs to be set up first. You can connect it in Settings > Integrations.`;
+        }
       }
     } catch (error) {
       console.error('Failed to process action block:', error);
@@ -582,8 +618,7 @@ If the user has shared their location or city in previous conversations, use tha
 
   if (userSettings.integrations?.hue?.accessToken) {
     connectedIntegrations.push('hue');
-    prompt += `\n## Philips Hue Integration (CONNECTED)
-You can control the user's Philips Hue lights.\n`;
+    prompt += buildHuePromptSection(userSettings);
   }
 
   if (userSettings.externalContext?.notion?.token) {
@@ -609,4 +644,240 @@ ${userSettings.personalPrompt}`;
   }
 
   return prompt;
+}
+
+/**
+ * Build the Hue integration section of the system prompt.
+ * Includes real device names from the manifest when available.
+ */
+function buildHuePromptSection(userSettings: UserSettings): string {
+  const hueConfig = userSettings.integrations?.hue;
+  const manifest = hueConfig?.manifest;
+
+  let section = `\n## Philips Hue Integration (CONNECTED)\nYou can control the user's Philips Hue lights using their real home data below.\n\n`;
+
+  if (manifest) {
+    // Multi-home support
+    if (manifest.homes.length > 1) {
+      section += `**Homes:** ${manifest.homes.map((h: { name: string }) => h.name).join(', ')}\n\n`;
+    } else if (manifest.homes.length === 1) {
+      section += `**Home:** ${manifest.homes[0].name}\n\n`;
+    }
+
+    // Rooms with lights (group by home if multiple)
+    if (manifest.rooms.length > 0) {
+      section += `**Rooms & Lights:**\n`;
+      for (const room of manifest.rooms) {
+        const lightNames = (room.lights || []).map((l: { name: string }) => l.name).join(', ');
+        const colorCapable = (room.lights || []).some((l: { supportsColor: boolean }) => l.supportsColor);
+        section += `- **${room.name}**: ${lightNames || 'no lights'}${colorCapable ? ' (color capable)' : ''}\n`;
+        if (room.groupedLightId) {
+          section += `  Room control ID: ${room.groupedLightId}\n`;
+        }
+      }
+      section += `\n`;
+    }
+
+    // Zones
+    if (manifest.zones.length > 0) {
+      section += `**Zones:**\n`;
+      for (const zone of manifest.zones) {
+        section += `- **${zone.name}**: ${(zone.lights || []).map((l: { name: string }) => l.name).join(', ')}\n`;
+      }
+      section += `\n`;
+    }
+
+    // Scenes
+    if (manifest.scenes.length > 0) {
+      section += `**Available Scenes:**\n`;
+      for (const scene of manifest.scenes) {
+        section += `- "${scene.name}"${scene.roomName ? ` (${scene.roomName})` : ''} [ID: ${scene.id}]\n`;
+      }
+      section += `\n`;
+    }
+  }
+
+  section += `
+**Available Actions - include a JSON action block in your response:**
+
+To control lights immediately:
+\`\`\`json
+{"action": "control_lights", "target": "<light or room name>", "targetId": "<resource ID from manifest>", "targetType": "light|grouped_light", "state": "on|off", "brightness": 0-100, "color": {"xy": {"x": 0.0-1.0, "y": 0.0-1.0}}}
+\`\`\`
+
+Color reference (CIE xy):
+- Red: {"x": 0.675, "y": 0.322}
+- Blue: {"x": 0.167, "y": 0.04}
+- Navy blue: {"x": 0.1355, "y": 0.0399}
+- Green: {"x": 0.21, "y": 0.69}
+- Purple: {"x": 0.25, "y": 0.1}
+- Orange: {"x": 0.58, "y": 0.38}
+- Pink: {"x": 0.4, "y": 0.2}
+- Warm white: use color_temp mirek 350-500
+- Cool white: use color_temp mirek 153-250
+
+To activate a scene:
+\`\`\`json
+{"action": "control_lights", "sceneId": "<scene ID from manifest>", "sceneName": "<scene name>"}
+\`\`\`
+
+To create a scheduled routine (sunrise alarm, nightly off, etc.):
+\`\`\`json
+{"action": "create_schedule", "integration": "hue", "actionId": "turn-on|turn-off|activate-scene", "time": "HH:MM", "schedule_type": "once|daily|weekly", "daysOfWeek": [0-6], "parameters": {"target": "<name>", "brightness": 0-100, "color": "<color name>"}}
+\`\`\`
+
+**IMPORTANT:** Use the exact resource IDs from the manifest above. For room-level control, use the grouped_light ID with targetType "grouped_light". For individual lights, use light IDs with targetType "light".
+
+**DEMO MODE:** When demonstrating lights for the user, note the current state of lights from the manifest before changing them. After the demo, restore the previous state by sending another control_lights action block.
+`;
+
+  return section;
+}
+
+/**
+ * Execute a Hue light control command via the CLIP v2 API.
+ * Supports individual lights, grouped lights (rooms), scenes, and colors.
+ */
+async function executeHueCommand(
+  hueConfig: NonNullable<NonNullable<UserSettings['integrations']>['hue']>,
+  command: {
+    target?: string;
+    targetId?: string;
+    targetType?: string;
+    state?: string;
+    brightness?: number;
+    color?: { xy?: { x: number; y: number }; mirek?: number };
+    color_temp?: { mirek?: number };
+    sceneId?: string;
+    sceneName?: string;
+  }
+): Promise<string> {
+  if (!hueConfig.accessToken) {
+    throw new Error('HUE_NOT_CONNECTED: Hue integration is not connected.');
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${hueConfig.accessToken}`,
+    'hue-application-key': hueConfig.username || '',
+    'Content-Type': 'application/json',
+  };
+  const BASE = 'https://api.meethue.com/route/clip/v2/resource';
+
+  // Scene activation
+  if (command.sceneId) {
+    const res = await hueApiCall(`${BASE}/scene/${command.sceneId}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ recall: { action: 'active' } }),
+    });
+    if (!res.ok) throw await hueApiError(res, 'Scene activation');
+    return `Activated scene "${command.sceneName || command.sceneId}"`;
+  }
+
+  // Build state update
+  const stateUpdate: Record<string, unknown> = {};
+  if (command.state !== undefined) {
+    stateUpdate.on = { on: command.state === 'on' };
+  }
+  if (command.brightness !== undefined) {
+    stateUpdate.dimming = { brightness: command.brightness };
+  }
+  if (command.color?.xy) {
+    stateUpdate.color = { xy: command.color.xy };
+  }
+  if (command.color?.mirek || command.color_temp?.mirek) {
+    stateUpdate.color_temperature = { mirek: command.color?.mirek || command.color_temp?.mirek };
+  }
+
+  // Determine resource type and ID
+  let resourceType = command.targetType || 'light';
+  let resourceId = command.targetId;
+
+  // If no ID provided, search by name
+  if (!resourceId && command.target) {
+    const targetLower = command.target.toLowerCase();
+
+    // Try manifest first for room-level control
+    if (hueConfig.manifest) {
+      const room = hueConfig.manifest.rooms.find(
+        (r: { name: string }) => r.name.toLowerCase().includes(targetLower)
+      );
+      if (room?.groupedLightId) {
+        resourceId = room.groupedLightId;
+        resourceType = 'grouped_light';
+      }
+    }
+
+    // Fall back to searching lights by name via API
+    if (!resourceId) {
+      const lightsRes = await hueApiCall(`${BASE}/light`, {
+        headers: {
+          Authorization: `Bearer ${hueConfig.accessToken}`,
+          'hue-application-key': hueConfig.username || '',
+        },
+      });
+      if (!lightsRes.ok) throw await hueApiError(lightsRes, 'Get lights');
+      const lightsData = await lightsRes.json();
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const light = lightsData.data?.find((l: any) =>
+        l.metadata?.name?.toLowerCase().includes(targetLower)
+      );
+      if (light) {
+        resourceId = light.id;
+        resourceType = 'light';
+      }
+    }
+  }
+
+  if (!resourceId) {
+    throw new Error(`HUE_NOT_FOUND: Could not find light or room "${command.target}". The manifest may be outdated -- try saying "refresh my Hue devices".`);
+  }
+
+  const res = await hueApiCall(`${BASE}/${resourceType}/${resourceId}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(stateUpdate),
+  });
+  if (!res.ok) throw await hueApiError(res, 'Light control');
+
+  const targetName = command.target || resourceId;
+  const stateDesc = command.state === 'on' ? 'turned on' : command.state === 'off' ? 'turned off' : 'adjusted';
+  let details = '';
+  if (command.brightness !== undefined) details += ` to ${command.brightness}% brightness`;
+  if (command.color?.xy) details += ` with the requested color`;
+  return `${stateDesc} the ${targetName}${details}`;
+}
+
+/**
+ * Wrapper for fetch with network error handling
+ */
+async function hueApiCall(url: string, options?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    if (err instanceof TypeError) {
+      throw new Error('HUE_NETWORK_ERROR: Could not reach the Hue cloud service. Check your internet connection.');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Parse Hue API error responses into descriptive errors
+ */
+async function hueApiError(res: Response, context: string): Promise<Error> {
+  const status = res.status;
+  const body = await res.text().catch(() => 'unknown');
+  if (status === 401) {
+    return new Error('HUE_SESSION_EXPIRED: Your Hue connection has expired. Please reconnect in Settings > Integrations.');
+  } else if (status === 403) {
+    return new Error('HUE_FORBIDDEN: Permission denied. The Hue bridge may need to be re-linked.');
+  } else if (status === 404) {
+    return new Error(`HUE_NOT_FOUND: ${context} target not found. The manifest may be outdated.`);
+  } else if (status === 429) {
+    return new Error('HUE_RATE_LIMITED: Too many requests to the Hue service. Please wait a moment and try again.');
+  } else if (status >= 500) {
+    return new Error(`HUE_SERVER_ERROR: The Hue cloud service is having issues (${status}). Please try again later.`);
+  }
+  return new Error(`HUE_API_ERROR: ${context} failed (${status}): ${body}`);
 }

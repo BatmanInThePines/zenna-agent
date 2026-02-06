@@ -29,7 +29,8 @@
       "Bash(dir:*)",
       "Bash(npm i:*)",
       "Bash(vercel logs:*)",
-      "Bash(mother 's name?\" in the memory instead of the actual answer.\n\nNow filters out memories that start with question patterns like:\n- \"what is my\", \"who is my\", \"tell me\", \"do you know\", etc.\n\nThis ensures the LLM receives actual answers and facts, not \nechoed questions that provide no useful information.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(mother 's name?\" in the memory instead of the actual answer.\n\nNow filters out memories that start with question patterns like:\n- \"what is my\", \"who is my\", \"tell me\", \"do you know\", etc.\n\nThis ensures the LLM receives actual answers and facts, not \nechoed questions that provide no useful information.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(set NODE_OPTIONS=--max-old-space-size=4096)"
     ]
   }
 }

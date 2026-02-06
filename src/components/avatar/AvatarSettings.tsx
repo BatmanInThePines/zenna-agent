@@ -129,7 +129,25 @@ interface UploadedImage {
   angle: 'front' | 'three-quarter' | 'side' | 'back' | 'detail';
 }
 
-type SettingsSubTab = 'select' | 'customize' | 'upload' | 'reconstruction';
+type SettingsSubTab = 'select' | 'customize' | 'upload' | 'reconstruction' | 'editor';
+
+// Quality preset options
+type QualityPreset = 'fast' | 'balanced' | 'quality';
+
+const QUALITY_PRESETS: { id: QualityPreset; name: string; description: string; icon: string }[] = [
+  { id: 'fast', name: 'Fast', description: 'Quick preview (~30s)', icon: '⚡' },
+  { id: 'balanced', name: 'Balanced', description: 'Good quality (~60s)', icon: '⚖️' },
+  { id: 'quality', name: 'High Quality', description: 'Best results (~90s)', icon: '✨' },
+];
+
+interface GenerationLimits {
+  allowed: boolean;
+  remaining: number;
+  limit: number;
+  used: number;
+  isUnlimited: boolean;
+  resetsAt: string;
+}
 
 // =============================================================================
 // COLOR PRESETS
@@ -180,11 +198,39 @@ export default function AvatarSettings({
   const [reconstructionJob, setReconstructionJob] = useState<ReconstructionJob | null>(null);
   const [isStartingReconstruction, setIsStartingReconstruction] = useState(false);
 
+  // Quality preset state
+  const [selectedQuality, setSelectedQuality] = useState<QualityPreset>('balanced');
+
+  // Generation limits state
+  const [generationLimits, setGenerationLimits] = useState<GenerationLimits | null>(null);
+  const [isLoadingLimits, setIsLoadingLimits] = useState(true);
+
   // Message state
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   // Refs
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // =============================================================================
+  // LOAD GENERATION LIMITS
+  // =============================================================================
+
+  useEffect(() => {
+    async function loadLimits() {
+      try {
+        const response = await fetch('/api/avatar/limits');
+        if (response.ok) {
+          const data = await response.json();
+          setGenerationLimits(data);
+        }
+      } catch (error) {
+        console.error('Failed to load generation limits:', error);
+      } finally {
+        setIsLoadingLimits(false);
+      }
+    }
+    loadLimits();
+  }, []);
 
   // =============================================================================
   // PRESET SELECTION
@@ -369,6 +415,15 @@ export default function AvatarSettings({
       return;
     }
 
+    // Check generation limits
+    if (generationLimits && !generationLimits.allowed && !generationLimits.isUnlimited) {
+      setMessage({
+        type: 'error',
+        text: `Monthly generation limit reached (${generationLimits.limit}/month). Your limit resets on ${new Date(generationLimits.resetsAt).toLocaleDateString()}.`,
+      });
+      return;
+    }
+
     setIsStartingReconstruction(true);
     setMessage(null);
 
@@ -427,13 +482,16 @@ export default function AvatarSettings({
         imageUrls.push(uploadData.url);
       }
 
-      // Start reconstruction with pre-uploaded image URLs
-      setMessage({ type: 'info', text: 'Starting 3D reconstruction...' });
+      // Start reconstruction with pre-uploaded image URLs and quality preset
+      setMessage({ type: 'info', text: `Starting 3D reconstruction (${selectedQuality} quality)...` });
 
       const response = await fetch('/api/avatar/reconstruct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrls }),
+        body: JSON.stringify({
+          imageUrls,
+          qualityPreset: selectedQuality,
+        }),
       });
 
       const data = await response.json();
@@ -441,8 +499,21 @@ export default function AvatarSettings({
       if (data.success) {
         setReconstructionJob(data.job);
         setActiveTab('reconstruction');
+        // Update limits after successful start
+        if (data.limits) {
+          setGenerationLimits(prev => prev ? {
+            ...prev,
+            remaining: data.limits.remaining,
+            used: prev.used + 1,
+            allowed: data.limits.remaining > 0,
+          } : null);
+        }
         setMessage({ type: 'success', text: 'Reconstruction started! This may take a few minutes.' });
       } else {
+        // Check if limit reached
+        if (data.limitReached) {
+          setGenerationLimits(prev => prev ? { ...prev, allowed: false, remaining: 0 } : null);
+        }
         setMessage({ type: 'error', text: data.error || 'Failed to start reconstruction.' });
       }
     } catch (error) {
@@ -514,6 +585,11 @@ export default function AvatarSettings({
 
   if (reconstructionJob) {
     tabs.push({ id: 'reconstruction', label: 'Progress', icon: '⚙️' });
+
+    // Add Editor tab only when reconstruction is complete
+    if (reconstructionJob.status === 'complete' && reconstructionJob.outputModelUrl) {
+      tabs.push({ id: 'editor', label: 'Editor', icon: '✏️' });
+    }
   }
 
   // =============================================================================
@@ -868,6 +944,49 @@ export default function AvatarSettings({
                 )}
               </div>
 
+              {/* Generation Limits Banner */}
+              {!isLoadingLimits && generationLimits && (
+                <div className={`rounded-lg p-4 ${
+                  generationLimits.isUnlimited
+                    ? 'bg-green-500/10 border border-green-500/30'
+                    : generationLimits.remaining === 0
+                    ? 'bg-red-500/10 border border-red-500/30'
+                    : 'bg-blue-500/10 border border-blue-500/30'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">
+                        {generationLimits.isUnlimited ? '♾️' : generationLimits.remaining === 0 ? '🚫' : '🎯'}
+                      </span>
+                      <div>
+                        <p className="font-medium text-sm">
+                          {generationLimits.isUnlimited
+                            ? 'Unlimited Generations'
+                            : `${generationLimits.remaining} of ${generationLimits.limit} generations remaining`}
+                        </p>
+                        <p className="text-xs text-zenna-muted">
+                          {generationLimits.isUnlimited
+                            ? 'Admin accounts have unlimited avatar generations'
+                            : `Resets ${new Date(generationLimits.resetsAt).toLocaleDateString()}`}
+                        </p>
+                      </div>
+                    </div>
+                    {!generationLimits.isUnlimited && (
+                      <div className="flex gap-1">
+                        {[...Array(generationLimits.limit)].map((_, i) => (
+                          <div
+                            key={i}
+                            className={`w-3 h-3 rounded-full ${
+                              i < generationLimits.used ? 'bg-zenna-muted' : 'bg-zenna-accent'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Uploaded Images */}
               {uploadedImages.length > 0 && (
                 <div>
@@ -924,11 +1043,37 @@ export default function AvatarSettings({
                     ))}
                   </div>
 
+                  {/* Quality Preset Selector */}
+                  <div className="mt-6">
+                    <h4 className="text-sm font-medium mb-3">Generation Quality</h4>
+                    <div className="grid grid-cols-3 gap-3">
+                      {QUALITY_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          onClick={() => setSelectedQuality(preset.id)}
+                          className={`p-4 rounded-lg border-2 transition-all text-center ${
+                            selectedQuality === preset.id
+                              ? 'border-zenna-accent bg-zenna-accent/10'
+                              : 'border-zenna-border hover:border-zenna-accent/50'
+                          }`}
+                        >
+                          <span className="text-2xl block mb-1">{preset.icon}</span>
+                          <p className="text-sm font-medium">{preset.name}</p>
+                          <p className="text-xs text-zenna-muted">{preset.description}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* Start Reconstruction Button */}
                   <div className="mt-6 flex justify-center">
                     <button
                       onClick={startReconstruction}
-                      disabled={isStartingReconstruction || uploadedImages.length === 0}
+                      disabled={
+                        isStartingReconstruction ||
+                        uploadedImages.length === 0 ||
+                        Boolean(generationLimits && !generationLimits.allowed && !generationLimits.isUnlimited)
+                      }
                       className="btn-primary px-8"
                     >
                       {isStartingReconstruction ? (
@@ -936,21 +1081,212 @@ export default function AvatarSettings({
                           <span className="spinner-sm mr-2" />
                           Starting...
                         </>
+                      ) : generationLimits && !generationLimits.allowed && !generationLimits.isUnlimited ? (
+                        '🚫 Generation Limit Reached'
                       ) : uploadedImages.length === 1 ? (
                         '🧠 Generate Avatar (Single Image AI)'
                       ) : (
-                        `🔄 Generate Avatar (${uploadedImages.length} Images Photogrammetry)`
+                        `🔄 Generate Avatar (${uploadedImages.length} Images)`
                       )}
                     </button>
                   </div>
 
                   <p className="text-center text-xs text-zenna-muted mt-2">
-                    {uploadedImages.length === 1
-                      ? 'Using PIFuHD for single-image 3D reconstruction'
-                      : 'Using Meshroom/OpenMVG for multi-image photogrammetry'}
+                    {selectedQuality === 'fast'
+                      ? 'Quick preview - perfect for testing'
+                      : selectedQuality === 'quality'
+                      ? 'Highest detail textures and mesh resolution'
+                      : 'Optimized balance of speed and quality'}
                   </p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* EDITOR TAB */}
+          {activeTab === 'editor' && reconstructionJob?.status === 'complete' && reconstructionJob.outputModelUrl && (
+            <div className="space-y-6">
+              {/* Editor Header */}
+              <div className="text-center">
+                <div className="w-20 h-20 mx-auto mb-4 bg-gradient-to-br from-purple-500/20 to-pink-500/20 rounded-2xl flex items-center justify-center">
+                  <span className="text-4xl">🎨</span>
+                </div>
+                <h3 className="text-lg font-semibold mb-2">Avatar Editor</h3>
+                <p className="text-sm text-zenna-muted max-w-md mx-auto">
+                  Fine-tune your avatar with professional 3D editing tools.
+                  Adjust proportions, smooth surfaces, or add custom details.
+                </p>
+              </div>
+
+              {/* Editor Options */}
+              <div className="grid gap-4 max-w-lg mx-auto">
+                {/* Download for External Editing */}
+                <div className="glass-card p-4">
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <span className="text-2xl">💾</span>
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-medium mb-1">Download 3D Model</h4>
+                      <p className="text-xs text-zenna-muted mb-3">
+                        Download your avatar as a GLB file to edit in your preferred 3D software.
+                      </p>
+                      <a
+                        href={reconstructionJob.outputModelUrl}
+                        download={`zenna-avatar-${reconstructionJob.id}.glb`}
+                        className="btn-secondary text-sm inline-flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Download GLB
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Open in Web Editor */}
+                <div className="glass-card p-4">
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 bg-purple-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <span className="text-2xl">🌐</span>
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-medium mb-1">Open in 3D Viewer</h4>
+                      <p className="text-xs text-zenna-muted mb-3">
+                        Preview and inspect your avatar in an interactive 3D viewer.
+                      </p>
+                      <button
+                        onClick={() => {
+                          // Open in a 3D viewer like model-viewer or gltf-viewer
+                          const viewerUrl = `https://gltf-viewer.donmccurdy.com/#model=${encodeURIComponent(reconstructionJob.outputModelUrl!)}`;
+                          window.open(viewerUrl, '_blank');
+                        }}
+                        className="btn-secondary text-sm inline-flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                        Open Viewer
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Professional Editing Guide */}
+                <div className="glass-card p-4 bg-gradient-to-br from-amber-500/5 to-orange-500/5">
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 bg-amber-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <span className="text-2xl">📚</span>
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-medium mb-1">Professional Editing</h4>
+                      <p className="text-xs text-zenna-muted mb-3">
+                        For advanced modifications like rigging, animations, or texture painting,
+                        we recommend using professional 3D software.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <a
+                          href="https://www.blender.org/download/"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-zenna-accent hover:underline"
+                        >
+                          Blender (Free)
+                        </a>
+                        <span className="text-xs text-zenna-muted">•</span>
+                        <a
+                          href="https://www.autodesk.com/products/maya"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-zenna-accent hover:underline"
+                        >
+                          Maya
+                        </a>
+                        <span className="text-xs text-zenna-muted">•</span>
+                        <a
+                          href="https://www.maxon.net/cinema-4d"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-zenna-accent hover:underline"
+                        >
+                          Cinema 4D
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Re-upload Edited Avatar */}
+                <div className="glass-card p-4 border-2 border-dashed border-zenna-accent/30">
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 bg-green-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <span className="text-2xl">📤</span>
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-medium mb-1">Upload Edited Avatar</h4>
+                      <p className="text-xs text-zenna-muted mb-3">
+                        Made changes? Upload your edited GLB file to use as your new avatar.
+                      </p>
+                      <input
+                        type="file"
+                        accept=".glb,.gltf"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+
+                          setMessage({ type: 'info', text: 'Uploading edited avatar...' });
+
+                          try {
+                            const formData = new FormData();
+                            formData.append('model', file);
+
+                            const response = await fetch('/api/settings/avatar', {
+                              method: 'POST',
+                              body: formData,
+                            });
+
+                            if (response.ok) {
+                              const data = await response.json();
+                              setMessage({ type: 'success', text: 'Edited avatar uploaded successfully!' });
+                              onAvatarChange?.(data.avatarModelUrl, 'custom');
+                            } else {
+                              const data = await response.json();
+                              setMessage({ type: 'error', text: data.error || 'Failed to upload avatar' });
+                            }
+                          } catch {
+                            setMessage({ type: 'error', text: 'Failed to upload edited avatar' });
+                          }
+                        }}
+                        className="hidden"
+                        id="edited-avatar-upload"
+                      />
+                      <label
+                        htmlFor="edited-avatar-upload"
+                        className="btn-primary text-sm inline-flex items-center gap-2 cursor-pointer"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Upload GLB File
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tips */}
+              <div className="bg-zenna-surface/50 rounded-lg p-4 max-w-lg mx-auto">
+                <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <span>💡</span> Editing Tips
+                </h4>
+                <ul className="text-xs text-zenna-muted space-y-1">
+                  <li>• Keep polygon count under 50,000 for best performance</li>
+                  <li>• Preserve UV mapping when editing textures</li>
+                  <li>• Export as GLB format with embedded textures</li>
+                  <li>• Test animations in the 3D viewer before uploading</li>
+                </ul>
+              </div>
             </div>
           )}
 
@@ -1067,12 +1403,24 @@ export default function AvatarSettings({
                         className="w-32 h-32 mx-auto rounded-lg border border-zenna-accent"
                       />
                     )}
-                    <button
-                      onClick={onClose}
-                      className="btn-primary"
-                    >
-                      Use This Avatar
-                    </button>
+                    <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                      <button
+                        onClick={onClose}
+                        className="btn-primary"
+                      >
+                        Use This Avatar
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('editor')}
+                        className="btn-secondary flex items-center justify-center gap-2"
+                      >
+                        <span>✏️</span>
+                        Refine in Editor
+                      </button>
+                    </div>
+                    <p className="text-xs text-zenna-muted text-center">
+                      Not satisfied? Use the Editor to adjust and perfect your avatar.
+                    </p>
                   </div>
                 )}
               </div>

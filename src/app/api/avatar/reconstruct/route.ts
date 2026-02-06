@@ -24,12 +24,25 @@ import {
   getJobsForUser,
   uploadImage,
   updateJobStatus,
+  canUserGenerate,
+  getMonthlyGenerationCount,
 } from '@/lib/avatar/supabase-reconstruction-store';
 import {
   startReplicateReconstruction,
   runReconstructionSync,
   estimateReconstructionCost,
+  TRELLIS_QUALITY_PRESETS,
+  TrellisCustomOptions,
 } from '@/lib/avatar/replicate-reconstruction';
+import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
+
+function getIdentityStore() {
+  return new SupabaseIdentityStore({
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    jwtSecret: process.env.AUTH_SECRET!,
+  });
+}
 
 // =============================================================================
 // CONFIG
@@ -107,6 +120,22 @@ export async function POST(request: NextRequest) {
     }
     const user = { id: session.user.id, username: session.user.email?.split('@')[0] || 'user' };
 
+    // Get user role for limit checking
+    const identityStore = getIdentityStore();
+    const fullUser = await identityStore.getUser(user.id);
+    const userRole = fullUser?.role || 'user';
+
+    // Check generation limits
+    const limitCheck = await canUserGenerate(user.id, userRole);
+    if (!limitCheck.allowed) {
+      return NextResponse.json({
+        error: `Monthly generation limit reached (${limitCheck.limit}/month). Upgrade to admin for unlimited generations.`,
+        limitReached: true,
+        remaining: 0,
+        limit: limitCheck.limit,
+      }, { status: 429 });
+    }
+
     // Check Replicate API token is configured
     if (!process.env.REPLICATE_API_TOKEN) {
       console.error('REPLICATE_API_TOKEN not configured');
@@ -120,12 +149,21 @@ export async function POST(request: NextRequest) {
     // 1. JSON body with pre-uploaded imageUrls (avoids Vercel 4.5MB body limit)
     // 2. FormData with image files (for single small images)
     let uploadedUrls: string[] = [];
+    let customOptions: TrellisCustomOptions | undefined;
     const contentType = request.headers.get('content-type') || '';
 
     if (contentType.includes('application/json')) {
       // Mode 1: Pre-uploaded image URLs
       const body = await request.json();
       uploadedUrls = body.imageUrls || [];
+
+      // Extract custom TRELLIS options
+      if (body.qualityPreset || body.customOptions) {
+        customOptions = {
+          qualityPreset: body.qualityPreset,
+          ...body.customOptions,
+        };
+      }
 
       if (uploadedUrls.length === 0) {
         return NextResponse.json({ error: 'No image URLs provided' }, { status: 400 });
@@ -196,7 +234,7 @@ export async function POST(request: NextRequest) {
       if (USE_SYNC_MODE) {
         // Sync mode: Wait for completion (dev only, will timeout on Vercel)
         console.log(`Starting sync reconstruction for job ${job.id}`);
-        runReconstructionSync(job.id, uploadedUrls).catch((error) => {
+        runReconstructionSync(job.id, uploadedUrls, customOptions).catch((error) => {
           console.error('Sync reconstruction failed:', error);
         });
       } else {
@@ -204,7 +242,7 @@ export async function POST(request: NextRequest) {
         const webhookUrl = `${getBaseUrl()}/api/avatar/reconstruct/webhook?jobId=${job.id}`;
         console.log(`Starting async reconstruction for job ${job.id}, webhook: ${webhookUrl}`);
 
-        await startReplicateReconstruction(job.id, uploadedUrls, webhookUrl);
+        await startReplicateReconstruction(job.id, uploadedUrls, webhookUrl, customOptions);
       }
     } catch (error) {
       console.error('Failed to start Replicate reconstruction:', error);
@@ -225,10 +263,16 @@ export async function POST(request: NextRequest) {
         imageCount: job.image_count,
         method: job.method,
         createdAt: job.created_at,
+        qualityPreset: customOptions?.qualityPreset || 'balanced',
       },
       estimate: {
         costUsd: costEstimate.estimatedCostUsd,
         timeSeconds: costEstimate.estimatedTimeSeconds,
+      },
+      limits: {
+        remaining: limitCheck.remaining - 1, // Account for this generation
+        limit: limitCheck.limit,
+        isUnlimited: limitCheck.isUnlimited,
       },
     });
   } catch (error) {

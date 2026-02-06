@@ -101,9 +101,74 @@ interface DatabaseJob {
   output_model_url: string | null;
   output_thumbnail_url: string | null;
   replicate_prediction_id: string | null;
+  quality_preset: string | null;
+  custom_options: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+}
+
+// =============================================================================
+// GENERATION LIMITS
+// =============================================================================
+
+const MONTHLY_GENERATION_LIMIT = 3; // Free users get 3 per month
+
+/**
+ * Get the number of generations a user has made this month.
+ */
+export async function getMonthlyGenerationCount(userId: string): Promise<number> {
+  const client = getSupabaseClient();
+
+  // Get first day of current month
+  const now = new Date();
+  const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+  const { count, error } = await client
+    .from('avatar_reconstruction_jobs')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('created_at', firstOfMonth);
+
+  if (error) {
+    console.error('Failed to get monthly generation count:', error);
+    return 0;
+  }
+
+  return count || 0;
+}
+
+/**
+ * Check if a user can generate more avatars this month.
+ * Admins and fathers have unlimited generations.
+ */
+export async function canUserGenerate(userId: string, userRole: string): Promise<{
+  allowed: boolean;
+  remaining: number;
+  limit: number;
+  isUnlimited: boolean;
+}> {
+  // Admins and fathers have unlimited generations
+  const isAdmin = userRole === 'father' || userRole === 'admin';
+
+  if (isAdmin) {
+    return {
+      allowed: true,
+      remaining: Infinity,
+      limit: Infinity,
+      isUnlimited: true,
+    };
+  }
+
+  const count = await getMonthlyGenerationCount(userId);
+  const remaining = Math.max(0, MONTHLY_GENERATION_LIMIT - count);
+
+  return {
+    allowed: remaining > 0,
+    remaining,
+    limit: MONTHLY_GENERATION_LIMIT,
+    isUnlimited: false,
+  };
 }
 
 // =============================================================================

@@ -56,6 +56,36 @@ interface DatabaseMasterConfig {
   updated_at: string;
 }
 
+/**
+ * Deep merge utility for nested settings objects.
+ * Prevents data loss when updating nested fields like integrations.hue.manifest
+ * while preserving integrations.hue.accessToken etc.
+ */
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    const sourceVal = source[key];
+    const targetVal = result[key];
+    if (
+      sourceVal !== null &&
+      sourceVal !== undefined &&
+      typeof sourceVal === 'object' &&
+      !Array.isArray(sourceVal) &&
+      typeof targetVal === 'object' &&
+      targetVal !== null &&
+      !Array.isArray(targetVal)
+    ) {
+      result[key] = deepMerge(
+        targetVal as Record<string, unknown>,
+        sourceVal as Record<string, unknown>
+      );
+    } else {
+      result[key] = sourceVal;
+    }
+  }
+  return result;
+}
+
 export class SupabaseIdentityStore implements IdentityStore {
   private client: SupabaseClient;
   private jwtSecret: Uint8Array;
@@ -169,7 +199,10 @@ export class SupabaseIdentityStore implements IdentityStore {
       throw new Error('User not found');
     }
 
-    const updatedSettings = { ...user.settings, ...settings };
+    const updatedSettings = deepMerge(
+      (user.settings || {}) as Record<string, unknown>,
+      settings as Record<string, unknown>
+    ) as UserSettings;
 
     const { data, error } = await this.client
       .from('users')

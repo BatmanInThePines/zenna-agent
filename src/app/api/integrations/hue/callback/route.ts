@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
+import { fetchHueManifest } from '@/core/services/hue-manifest-builder';
 
 function getIdentityStore() {
   return new SupabaseIdentityStore({
@@ -127,9 +128,30 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Redirect back to chat with success, opening settings to integrations tab
+    // Fetch and store the Hue home manifest (rooms, lights, scenes, zones)
+    if (username) {
+      try {
+        console.log('[Hue Callback] Fetching home manifest after pairing...');
+        const manifest = await fetchHueManifest(tokens.access_token, username);
+        await identityStore.updateSettings(userId, {
+          integrations: {
+            hue: {
+              manifest,
+            },
+          },
+        });
+        console.log(
+          `[Hue Callback] Manifest stored: ${manifest.homes.length} homes, ${manifest.rooms.length} rooms, ${manifest.scenes.length} scenes`
+        );
+      } catch (manifestError) {
+        // Non-fatal: manifest can be fetched later at session start
+        console.error('[Hue Callback] Failed to fetch manifest (non-fatal):', manifestError);
+      }
+    }
+
+    // Redirect back to chat with success (announcement appears in transcript, not settings)
     return NextResponse.redirect(
-      new URL('/chat?hue_connected=true&open_settings=integrations', process.env.NEXT_PUBLIC_APP_URL!)
+      new URL('/chat?hue_connected=true', process.env.NEXT_PUBLIC_APP_URL!)
     );
   } catch (error) {
     console.error('Hue callback error:', error);

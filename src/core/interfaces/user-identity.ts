@@ -51,6 +51,8 @@ export interface UserSettings {
       refreshToken?: string;
       expiresAt?: number;
       username?: string;
+      // Home manifest data (fetched from Hue CLIP v2 API)
+      manifest?: HueManifest;
       // Legacy local access (deprecated)
       bridgeIp?: string;
     };
@@ -247,4 +249,57 @@ export interface AuthResult {
   token?: string;
   user?: User;
   error?: string;
+}
+
+// ============================================
+// HUE MANIFEST TYPES
+// ============================================
+
+export interface HueHome {
+  id: string;
+  name: string;
+}
+
+export interface HueRoom {
+  id: string;
+  homeId?: string;
+  name: string;
+  type: string;
+  lights: HueLight[];
+  groupedLightId?: string;
+}
+
+export interface HueZone {
+  id: string;
+  name: string;
+  lights: HueLight[];
+}
+
+export interface HueLight {
+  id: string;
+  name: string;
+  type: string;
+  supportsColor: boolean;
+  supportsDimming: boolean;
+  currentState?: {
+    on: boolean;
+    brightness?: number;
+    colorXY?: { x: number; y: number };
+    colorTemp?: number;
+  };
+}
+
+export interface HueScene {
+  id: string;
+  name: string;
+  roomId?: string;
+  roomName?: string;
+}
+
+export interface HueManifest {
+  homes: HueHome[];
+  rooms: HueRoom[];
+  zones: HueZone[];
+  scenes: HueScene[];
+  fetchedAt: number;
 }

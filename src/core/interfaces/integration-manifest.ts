@@ -8,6 +8,8 @@
  * - Scheduled routine definitions
  */
 
+import type { HueManifest } from './user-identity';
+
 export interface IntegrationCapability {
   id: string;
   name: string;
@@ -219,25 +221,55 @@ export interface IntegrationOnboardingState {
 }
 
 /**
- * Get education content for an integration
+ * Get education content for an integration.
+ * When hueManifest is provided, uses real device/room/scene names in examples.
  */
-export function getIntegrationEducation(integrationId: string): string {
+export function getIntegrationEducation(
+  integrationId: string,
+  hueManifest?: HueManifest
+): string {
   const manifest = INTEGRATION_MANIFESTS[integrationId];
   if (!manifest) return '';
 
   let education = `Great news! I'm now connected to your ${manifest.name}! ${manifest.icon}\n\n`;
   education += `${manifest.description}\n\n`;
-  education += `Here's what I can help you with:\n\n`;
 
-  manifest.capabilities.forEach((cap, index) => {
-    education += `**${index + 1}. ${cap.name}**\n`;
-    education += `${cap.description}\n`;
-    education += `Try saying: "${cap.examples[0]}"\n\n`;
-  });
+  // Use real Hue manifest data when available
+  if (integrationId === 'hue' && hueManifest && hueManifest.rooms.length > 0) {
+    const roomNames = hueManifest.rooms.map(r => r.name);
+    const sceneNames = hueManifest.scenes.map(s => s.name);
+    const firstRoom = roomNames[0];
+    const secondRoom = roomNames[1] || roomNames[0];
+    const firstScene = sceneNames[0];
+
+    education += `I can see your home setup:\n\n`;
+    education += `**Rooms:** ${roomNames.join(', ')}\n`;
+    if (sceneNames.length > 0) {
+      education += `**Scenes:** ${sceneNames.slice(0, 8).join(', ')}${sceneNames.length > 8 ? '...' : ''}\n`;
+    }
+    education += `\nHere's what you can say to me:\n\n`;
+    education += `**1. Light Control**\nTurn lights on or off by room\nTry: "Turn on the ${firstRoom} lights"\n\n`;
+    education += `**2. Brightness**\nAdjust brightness levels\nTry: "Dim the ${secondRoom} lights to 50%"\n\n`;
+    education += `**3. Colors**\nChange light colors on compatible bulbs\nTry: "Set the ${firstRoom} to warm white"\n\n`;
+    if (firstScene) {
+      education += `**4. Scenes**\nActivate your saved lighting scenes\nTry: "Activate the ${firstScene} scene"\n\n`;
+    }
+    education += `**5. Automations**\nSchedule lights on a timer\nTry: "Wake me up with a sunrise glow in the ${firstRoom} each morning starting at 7am"\n\n`;
+
+    // Demo offer using real room name
+    education += `\n**Want to try it out?** I can do a quick demo right now! I'll set the **${firstRoom}** lights to 80% navy blue, then restore them to their current state afterward. Just say "yes, show me!" to see it in action.\n`;
+  } else {
+    // Generic examples when no manifest available
+    education += `Here's what I can help you with:\n\n`;
+    manifest.capabilities.forEach((cap, index) => {
+      education += `**${index + 1}. ${cap.name}**\n`;
+      education += `${cap.description}\n`;
+      education += `Try saying: "${cap.examples[0]}"\n\n`;
+    });
+  }
 
   if (manifest.schedulableActions.length > 0) {
-    education += `\n🕐 **Scheduling**: I can also set up automatic routines! `;
-    education += `For example, I can turn your lights on every morning or off every night at a specific time. `;
+    education += `\n**Scheduling**: I can also set up automatic routines! `;
     education += `Just tell me what you'd like to automate, and I'll remember to do it.\n`;
   }
 

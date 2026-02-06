@@ -47,6 +47,8 @@ function ChatPageContent() {
   const [newIntegration, setNewIntegration] = useState<string | null>(null);
   const [showEducationPrompt, setShowEducationPrompt] = useState(false);
   const [pendingEducationIntegration, setPendingEducationIntegration] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [hueManifest, setHueManifest] = useState<any>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -108,6 +110,26 @@ function ChatPageContent() {
         }
         if (settingsData.settings?.avatarModelType) {
           setAvatarModelType(settingsData.settings.avatarModelType);
+        }
+
+        // Load and refresh Hue manifest if connected
+        if (settingsData.settings?.integrations?.hue?.accessToken) {
+          const existingManifest = settingsData.settings.integrations.hue.manifest;
+          if (existingManifest) {
+            setHueManifest(existingManifest);
+          }
+          const ONE_HOUR = 60 * 60 * 1000;
+          const isStale = !existingManifest || !existingManifest.fetchedAt || (Date.now() - existingManifest.fetchedAt > ONE_HOUR);
+          if (isStale) {
+            // Non-blocking refresh in background
+            fetch('/api/integrations/hue/manifest', { method: 'POST' })
+              .then(res => res.json())
+              .then(data => {
+                if (data.manifest) setHueManifest(data.manifest);
+                console.log('[Chat] Hue manifest refreshed');
+              })
+              .catch((err: unknown) => console.warn('[Chat] Hue manifest refresh failed:', err));
+          }
         }
 
         // Load conversation history from database
@@ -212,24 +234,15 @@ function ChatPageContent() {
   useEffect(() => {
     const hueConnected = searchParams.get('hue_connected');
     const notionConnected = searchParams.get('notion_connected');
-    const openSettings = searchParams.get('open_settings');
 
     if (hueConnected === 'true') {
+      // Close settings if open -- announcement appears in transcript instead
+      setIsSettingsOpen(false);
       handleNewIntegration('hue');
-      // Open settings to integrations tab if requested
-      if (openSettings === 'integrations') {
-        setInitialSettingsTab('integrations');
-        setIsSettingsOpen(true);
-      }
-      // Clean URL without reloading
       window.history.replaceState({}, '', '/chat');
     } else if (notionConnected === 'true') {
+      setIsSettingsOpen(false);
       handleNewIntegration('notion');
-      // Open settings to integrations tab if requested
-      if (openSettings === 'integrations') {
-        setInitialSettingsTab('integrations');
-        setIsSettingsOpen(true);
-      }
       window.history.replaceState({}, '', '/chat');
     }
   }, [searchParams, handleNewIntegration]);
@@ -239,11 +252,14 @@ function ChatPageContent() {
     setShowEducationPrompt(false);
 
     if (accepted && pendingEducationIntegration) {
-      // Generate education content
-      const education = getIntegrationEducation(pendingEducationIntegration);
+      // Generate education content with real device names when available
+      const education = getIntegrationEducation(
+        pendingEducationIntegration,
+        pendingEducationIntegration === 'hue' ? hueManifest : undefined
+      );
       const manifest = INTEGRATION_MANIFESTS[pendingEducationIntegration];
 
-      // Add Zenna's education message
+      // Add Zenna's education message to transcript
       const educationMessage: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -255,7 +271,13 @@ function ChatPageContent() {
       setZennaState('speaking');
       setCurrentEmotion('helpful');
 
-      // Optionally speak the education (summarized version)
+      // Build TTS summary with real room names if available
+      const firstRoom = hueManifest?.rooms?.[0]?.name;
+      const ttsText = firstRoom
+        ? `Great news! I'm now connected to your ${manifest?.name}. I can see rooms like ${firstRoom} in your home. Check the transcript for all the things I can do. Want me to demo by changing your ${firstRoom} lights to navy blue?`
+        : `Great news! I'm now connected to your ${manifest?.name}. ${manifest?.description} Would you like me to show you what I can do?`;
+
+      // Speak the education (summarized version)
       try {
         // Ensure audio context is resumed
         if (audioContextRef.current?.state === 'suspended') {
@@ -265,9 +287,7 @@ function ChatPageContent() {
         const response = await fetch('/api/zenna/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: `Great news! I'm now connected to your ${manifest?.name}. ${manifest?.description} Would you like me to show you what I can do?`,
-          }),
+          body: JSON.stringify({ text: ttsText }),
         });
 
         const data = await response.json();
@@ -300,7 +320,7 @@ function ChatPageContent() {
     // Clear the glow effect
     setNewIntegration(null);
     setPendingEducationIntegration(null);
-  }, [pendingEducationIntegration]);
+  }, [pendingEducationIntegration, hueManifest]);
 
   // Start session handler - called when user clicks "Begin Session"
   const handleStartSession = useCallback(async () => {

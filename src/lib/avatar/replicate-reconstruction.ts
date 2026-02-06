@@ -103,9 +103,53 @@ const DEFAULT_TRELLIS_OPTIONS: Partial<TrellisInput> = {
   slat_guidance_strength: 3,   // Stage 2 guidance (default)
 };
 
+// Quality presets for different use cases
+export const TRELLIS_QUALITY_PRESETS = {
+  fast: {
+    name: 'Fast',
+    description: 'Quick preview, lower quality',
+    texture_size: 512,
+    mesh_simplify: 0.9,
+    ss_sampling_steps: 8,
+    slat_sampling_steps: 8,
+  },
+  balanced: {
+    name: 'Balanced',
+    description: 'Good quality with reasonable speed',
+    texture_size: 1024,
+    mesh_simplify: 0.95,
+    ss_sampling_steps: 12,
+    slat_sampling_steps: 12,
+  },
+  quality: {
+    name: 'High Quality',
+    description: 'Best quality, takes longer',
+    texture_size: 2048,
+    mesh_simplify: 0.98,
+    ss_sampling_steps: 16,
+    slat_sampling_steps: 16,
+  },
+} as const;
+
+export type TrellisQualityPreset = keyof typeof TRELLIS_QUALITY_PRESETS;
+
+// Export input type for external use
+export type { TrellisInput };
+
 // =============================================================================
 // START RECONSTRUCTION
 // =============================================================================
+
+// Custom options type for user-configurable settings
+export interface TrellisCustomOptions {
+  qualityPreset?: TrellisQualityPreset;
+  texture_size?: number;
+  mesh_simplify?: number;
+  ss_sampling_steps?: number;
+  ss_guidance_strength?: number;
+  slat_sampling_steps?: number;
+  slat_guidance_strength?: number;
+}
 
 /**
  * Start a 3D reconstruction using Replicate's TRELLIS model.
@@ -113,17 +157,37 @@ const DEFAULT_TRELLIS_OPTIONS: Partial<TrellisInput> = {
  * @param jobId - The reconstruction job ID in our database
  * @param imageUrls - Array of image URLs (from Supabase Storage)
  * @param webhookUrl - URL for Replicate to call when done
+ * @param customOptions - Optional custom TRELLIS parameters
  * @returns The Replicate prediction ID
  */
 export async function startReplicateReconstruction(
   jobId: string,
   imageUrls: string[],
-  webhookUrl: string
+  webhookUrl: string,
+  customOptions?: TrellisCustomOptions
 ): Promise<string> {
   const replicate = getReplicateClient();
 
   // Update job status to processing
   await updateJobStatus(jobId, 'processing', 10);
+
+  // Merge options: defaults <- quality preset <- custom overrides
+  let finalOptions = { ...DEFAULT_TRELLIS_OPTIONS };
+
+  if (customOptions?.qualityPreset && TRELLIS_QUALITY_PRESETS[customOptions.qualityPreset]) {
+    const preset = TRELLIS_QUALITY_PRESETS[customOptions.qualityPreset];
+    finalOptions = { ...finalOptions, ...preset };
+  }
+
+  // Apply any individual custom overrides
+  if (customOptions) {
+    const { qualityPreset, ...overrides } = customOptions;
+    Object.entries(overrides).forEach(([key, value]) => {
+      if (value !== undefined) {
+        (finalOptions as Record<string, unknown>)[key] = value;
+      }
+    });
+  }
 
   try {
     // Create prediction with webhook
@@ -131,7 +195,7 @@ export async function startReplicateReconstruction(
     const prediction = await replicate.predictions.create({
       version: TRELLIS_VERSION,
       input: {
-        ...DEFAULT_TRELLIS_OPTIONS,
+        ...finalOptions,
         images: imageUrls,
       } as TrellisInput,
       webhook: webhookUrl,
@@ -316,11 +380,29 @@ export async function checkAndProcessPrediction(
  */
 export async function runReconstructionSync(
   jobId: string,
-  imageUrls: string[]
+  imageUrls: string[],
+  customOptions?: TrellisCustomOptions
 ): Promise<void> {
   const replicate = getReplicateClient();
 
   await updateJobStatus(jobId, 'processing', 10);
+
+  // Merge options: defaults <- quality preset <- custom overrides
+  let finalOptions = { ...DEFAULT_TRELLIS_OPTIONS };
+
+  if (customOptions?.qualityPreset && TRELLIS_QUALITY_PRESETS[customOptions.qualityPreset]) {
+    const preset = TRELLIS_QUALITY_PRESETS[customOptions.qualityPreset];
+    finalOptions = { ...finalOptions, ...preset };
+  }
+
+  if (customOptions) {
+    const { qualityPreset, ...overrides } = customOptions;
+    Object.entries(overrides).forEach(([key, value]) => {
+      if (value !== undefined) {
+        (finalOptions as Record<string, unknown>)[key] = value;
+      }
+    });
+  }
 
   try {
     console.log(`Starting sync reconstruction for job ${jobId}`);
@@ -330,7 +412,7 @@ export async function runReconstructionSync(
       `${TRELLIS_MODEL}:${TRELLIS_VERSION}` as `${string}/${string}:${string}`,
       {
         input: {
-          ...DEFAULT_TRELLIS_OPTIONS,
+          ...finalOptions,
           images: imageUrls,
         } as TrellisInput,
       }
