@@ -63,6 +63,13 @@ function ChatPageContent() {
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+
+  // iOS detection for audio handling workarounds
+  const isIOSRef = useRef<boolean>(false);
+  useEffect(() => {
+    isIOSRef.current = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }, []);
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -502,71 +509,123 @@ function ChatPageContent() {
         setZennaState('speaking');
 
         try {
-          // Ensure audio context is resumed
+          // Ensure audio context is resumed (required for iOS)
           if (audioContextRef.current?.state === 'suspended') {
             await audioContextRef.current.resume();
           }
 
-          // Use streaming TTS endpoint for faster first audio
-          const ttsResponse = await fetch('/api/zenna/tts-stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: fullText }),
-            signal: abortControllerRef.current?.signal,
-          });
-
-          if (ttsResponse.ok) {
-            // Convert stream to blob and play
-            const audioBlob = await ttsResponse.blob();
-            const audioUrl = URL.createObjectURL(audioBlob);
-
-            const audio = new Audio(audioUrl);
-            currentAudioRef.current = audio;
-
-            audio.onended = () => {
-              URL.revokeObjectURL(audioUrl);
-              currentAudioRef.current = null;
-              setZennaState('idle');
-
-              // Auto-resume listening if always-listening is enabled
-              if (alwaysListening) {
-                startAlwaysListening();
-              }
-            };
-
-            audio.onerror = () => {
-              URL.revokeObjectURL(audioUrl);
-              currentAudioRef.current = null;
-              setZennaState('idle');
-            };
-
-            await audio.play();
-          } else {
-            // Fall back to non-streaming endpoint
-            const fallbackResponse = await fetch('/api/zenna/speak', {
+          // iOS-specific: Use the speak endpoint with base64 data URL
+          // iOS Safari has issues with blob URLs and streaming audio
+          if (isIOSRef.current) {
+            console.log('[TTS] Using iOS-compatible base64 audio');
+            const iosResponse = await fetch('/api/zenna/speak', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ text: fullText }),
+              signal: abortControllerRef.current?.signal,
             });
 
-            const fallbackData = await fallbackResponse.json();
+            const iosData = await iosResponse.json();
 
-            if (fallbackData.audioUrl) {
-              const audio = new Audio(fallbackData.audioUrl);
+            if (iosData.audioUrl) {
+              const audio = new Audio();
               currentAudioRef.current = audio;
+
+              // iOS requires setting src before other properties
+              audio.src = iosData.audioUrl;
+              audio.preload = 'auto';
+
+              // Use load() to trigger iOS audio preparation
+              audio.load();
+
+              audio.oncanplaythrough = async () => {
+                try {
+                  await audio.play();
+                } catch (playError) {
+                  console.error('[TTS] iOS play error:', playError);
+                  setZennaState('idle');
+                }
+              };
 
               audio.onended = () => {
                 currentAudioRef.current = null;
                 setZennaState('idle');
+                if (alwaysListening) {
+                  startAlwaysListening();
+                }
               };
+
+              audio.onerror = (e) => {
+                console.error('[TTS] iOS audio error:', e);
+                currentAudioRef.current = null;
+                setZennaState('idle');
+              };
+            } else {
+              console.warn('[TTS] No audio URL from iOS fallback');
+              setZennaState('idle');
+            }
+          } else {
+            // Non-iOS: Use streaming TTS endpoint for faster first audio
+            const ttsResponse = await fetch('/api/zenna/tts-stream', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: fullText }),
+              signal: abortControllerRef.current?.signal,
+            });
+
+            if (ttsResponse.ok) {
+              // Convert stream to blob and play
+              const audioBlob = await ttsResponse.blob();
+              const audioUrl = URL.createObjectURL(audioBlob);
+
+              const audio = new Audio(audioUrl);
+              currentAudioRef.current = audio;
+
+              audio.onended = () => {
+                URL.revokeObjectURL(audioUrl);
+                currentAudioRef.current = null;
+                setZennaState('idle');
+
+                // Auto-resume listening if always-listening is enabled
+                if (alwaysListening) {
+                  startAlwaysListening();
+                }
+              };
+
               audio.onerror = () => {
+                URL.revokeObjectURL(audioUrl);
                 currentAudioRef.current = null;
                 setZennaState('idle');
               };
 
               await audio.play();
             } else {
-              setZennaState('idle');
+              // Fall back to non-streaming endpoint
+              const fallbackResponse = await fetch('/api/zenna/speak', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: fullText }),
+              });
+
+              const fallbackData = await fallbackResponse.json();
+
+              if (fallbackData.audioUrl) {
+                const audio = new Audio(fallbackData.audioUrl);
+                currentAudioRef.current = audio;
+
+                audio.onended = () => {
+                  currentAudioRef.current = null;
+                  setZennaState('idle');
+                };
+                audio.onerror = () => {
+                  currentAudioRef.current = null;
+                  setZennaState('idle');
+                };
+
+                await audio.play();
+              } else {
+                setZennaState('idle');
+              }
             }
           }
         } catch (ttsError) {
