@@ -443,14 +443,21 @@ NEVER invent names or facts. If you don't know something, ask.`,
 
           // Check if provider is Claude with tool support
           const isClaudeWithTools = brainProviderId === 'claude' &&
-            'generateResponseStreamWithTools' in brainProvider &&
-            typeof brainProvider.generateResponseStreamWithTools === 'function';
+            'generateResponseStreamWithTools' in brainProvider;
 
           // Check if provider supports streaming
           if (isClaudeWithTools) {
             // Use Claude streaming with tool support for real-time data
             console.log('[Chat] Using Claude with tool support');
-            const responseStream = brainProvider.generateResponseStreamWithTools(
+            // Cast to the Claude provider type to access tool methods
+            const claudeProvider = brainProvider as {
+              generateResponseStreamWithTools: (
+                messages: Message[],
+                options?: unknown,
+                executeToolFn?: (name: string, input: Record<string, unknown>) => Promise<string>
+              ) => AsyncGenerator<string, void, unknown>;
+            };
+            const responseStream = claudeProvider.generateResponseStreamWithTools(
               history,
               undefined,
               executeWebSearchTool
