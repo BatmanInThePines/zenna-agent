@@ -29,20 +29,42 @@ async function getMemoryService(): Promise<MemoryService> {
   return memoryServiceInstance;
 }
 
+// Service-to-service authentication for product integrations (e.g., 360Aware)
+const THREESIXTY_AWARE_SHARED_SECRET = process.env.THREESIXTY_AWARE_SHARED_SECRET;
+
 export async function POST(request: NextRequest) {
   try {
     // Initialize memory service
     const memoryService = await getMemoryService();
     const identityStore = memoryService.getIdentityStore();
 
-    // Verify authentication using NextAuth
-    const session = await auth();
+    // Check for service-to-service auth (360Aware calling Zenna)
+    const productId = request.headers.get('X-Product-Id');
+    const serviceUserId = request.headers.get('X-User-Id');
+    const serviceAuth = request.headers.get('X-Service-Auth');
 
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    let userId: string;
+
+    if (productId === '360aware' && serviceAuth && serviceUserId) {
+      // Validate service-to-service authentication
+      if (THREESIXTY_AWARE_SHARED_SECRET && serviceAuth === THREESIXTY_AWARE_SHARED_SECRET) {
+        // Service auth valid - use provided user ID (360Aware creates headless accounts)
+        userId = serviceUserId;
+        console.log(`[Chat] Service auth from 360Aware for user: ${userId}`);
+      } else {
+        console.warn('[Chat] Invalid 360Aware service auth');
+        return NextResponse.json({ error: 'Invalid service authentication' }, { status: 401 });
+      }
+    } else {
+      // Standard user authentication via NextAuth
+      const session = await auth();
+
+      if (!session?.user?.id) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+
+      userId = session.user.id;
     }
-
-    const userId = session.user.id;
 
     const { message, productContext } = await request.json() as {
       message: string;
@@ -59,10 +81,29 @@ export async function POST(request: NextRequest) {
       : null;
 
     // Get user and master config
-    const [user, masterConfig] = await Promise.all([
+    let [user, masterConfig] = await Promise.all([
       identityStore.getUser(userId),
       identityStore.getMasterConfig(),
     ]);
+
+    // Auto-create headless user for product integrations (e.g., 360Aware)
+    if (!user && productContext?.productId) {
+      console.log(`[Chat] Creating headless user for ${productContext.productId}: ${userId}`);
+      try {
+        user = await identityStore.createUser({
+          id: userId,
+          email: `${productContext.productId}_${userId}@headless.local`,
+          settings: {
+            personalPrompt: '',
+            preferredBrainProvider: 'claude',
+          },
+        });
+        console.log(`[Chat] Headless user created: ${userId}`);
+      } catch (createError) {
+        console.error('[Chat] Failed to create headless user:', createError);
+        return NextResponse.json({ error: 'Failed to create user account' }, { status: 500 });
+      }
+    }
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
