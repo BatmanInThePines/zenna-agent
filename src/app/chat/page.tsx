@@ -10,6 +10,7 @@ import SettingsPanel from '@/components/SettingsPanel';
 import KnowledgeIngestionIndicator from '@/components/KnowledgeIngestionIndicator';
 import VoiceControls from '@/components/VoiceControls';
 import { INTEGRATION_MANIFESTS, getIntegrationEducation } from '@/core/interfaces/integration-manifest';
+import GeolocationPrompt from '@/components/GeolocationPrompt';
 
 interface Message {
   id: string;
@@ -49,6 +50,16 @@ function ChatPageContent() {
   const [pendingEducationIntegration, setPendingEducationIntegration] = useState<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [hueManifest, setHueManifest] = useState<any>(null);
+
+  // Geolocation state
+  const [showGeolocationPrompt, setShowGeolocationPrompt] = useState(false);
+  const [userLocation, setUserLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    city?: string;
+    region?: string;
+    country?: string;
+  } | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -144,6 +155,10 @@ function ChatPageContent() {
           }));
           setMessages(loadedMessages);
         }
+
+        // Show geolocation prompt after authentication
+        // This runs after settings are loaded but before greeting
+        setShowGeolocationPrompt(true);
 
         // Auto-start session: fetch greeting immediately after auth
         // But only if there's no existing conversation history
@@ -1020,6 +1035,53 @@ function ChatPageContent() {
     router.push('/login');
   }, [router]);
 
+  // Handle geolocation granted - save to user settings and memory
+  const handleLocationGranted = useCallback(async (location: {
+    latitude: number;
+    longitude: number;
+    city?: string;
+    region?: string;
+    country?: string;
+  }) => {
+    setUserLocation(location);
+    setShowGeolocationPrompt(false);
+
+    // Save location to user settings via API
+    try {
+      await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location: {
+            latitude: location.latitude,
+            longitude: location.longitude,
+            city: location.city,
+            region: location.region,
+            country: location.country,
+            updatedAt: new Date().toISOString(),
+          },
+        }),
+      });
+
+      // Also store as a memory for Zen-na to reference
+      const locationStr = [location.city, location.region, location.country]
+        .filter(Boolean)
+        .join(', ');
+
+      if (locationStr) {
+        console.log(`[Geolocation] User location set to: ${locationStr}`);
+      }
+    } catch (error) {
+      console.error('Failed to save location:', error);
+    }
+  }, []);
+
+  // Handle geolocation denied
+  const handleLocationDenied = useCallback(() => {
+    setShowGeolocationPrompt(false);
+    console.log('[Geolocation] User denied location access');
+  }, []);
+
   // Handle Notion knowledge ingestion completion
   const handleIngestionComplete = useCallback(async () => {
     // Add completion message to transcript
@@ -1269,6 +1331,14 @@ function ChatPageContent() {
           }}
           initialAvatarUrl={avatarUrl}
           initialModelType={avatarModelType}
+        />
+      )}
+
+      {/* Geolocation Permission Prompt */}
+      {showGeolocationPrompt && (
+        <GeolocationPrompt
+          onLocationGranted={handleLocationGranted}
+          onLocationDenied={handleLocationDenied}
         />
       )}
 

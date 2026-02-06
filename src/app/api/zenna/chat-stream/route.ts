@@ -584,10 +584,18 @@ CRITICAL ANTI-HALLUCINATION RULES (NEVER VIOLATE):
   prompt += `\n# Tools\n`;
 
   // Web Search / Real-Time Information Capabilities
+  // Include user's location if available
+  const userLocationStr = userSettings.location?.city
+    ? [userSettings.location.city, userSettings.location.region, userSettings.location.country].filter(Boolean).join(', ')
+    : null;
+
   prompt += `\n## Real-Time Information Access (ENABLED)
 
 You have the ability to provide real-time information from the internet when the user asks. This step is important.
-
+${userLocationStr ? `
+**USER'S CURRENT LOCATION: ${userLocationStr}**
+Use this location automatically for local queries (weather, news, time, events) unless the user specifies a different location.
+` : ''}
 **ALLOWED REAL-TIME QUERIES - You CAN provide information about:**
 - **Weather**: Current conditions, forecasts, and weather alerts for any location worldwide
 - **Time**: Current time in any timezone or city around the world

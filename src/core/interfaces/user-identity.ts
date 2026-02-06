@@ -76,6 +76,16 @@ export interface UserSettings {
 
   // UI preferences
   theme?: 'dark' | 'light';
+
+  // Geolocation data
+  location?: {
+    latitude: number;
+    longitude: number;
+    city?: string;
+    region?: string;
+    country?: string;
+    updatedAt?: string;
+  };
 }
 
 export interface UserSession {
