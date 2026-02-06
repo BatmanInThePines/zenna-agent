@@ -380,6 +380,37 @@ NEVER invent names or facts. If you don't know something, ask.`,
       apiKey: brainApiKey,
     });
 
+    // Tool execution function for web searches
+    const executeWebSearchTool = async (toolName: string, input: Record<string, unknown>): Promise<string> => {
+      if (toolName === 'web_search') {
+        try {
+          const baseUrl = process.env.VERCEL_URL
+            ? `https://${process.env.VERCEL_URL}`
+            : process.env.NEXTAUTH_URL || 'http://localhost:3000';
+
+          const response = await fetch(`${baseUrl}/api/zenna/web-search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              query: input.query,
+              type: input.type,
+            }),
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            return `${result.data}\n(Source: ${result.source})`;
+          } else {
+            return result.error || 'Search failed';
+          }
+        } catch (error) {
+          console.error('[Chat] Web search error:', error);
+          return `Failed to fetch real-time data: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        }
+      }
+      return 'Unknown tool';
+    };
+
     // Create SSE stream
     const encoder = new TextEncoder();
     let fullResponse = '';
@@ -388,7 +419,7 @@ NEVER invent names or facts. If you don't know something, ask.`,
       async start(controller) {
         // Timeout handling - send "thinking longer" message after 10 seconds
         const THINKING_TIMEOUT_MS = 10000;
-        const HARD_TIMEOUT_MS = 30000;
+        const HARD_TIMEOUT_MS = 60000; // Increased for tool use
         let thinkingTimeoutSent = false;
         let responseStarted = false;
         const startTime = Date.now();
@@ -410,9 +441,46 @@ NEVER invent names or facts. If you don't know something, ask.`,
             setTimeout(() => reject(new Error('Response timeout')), HARD_TIMEOUT_MS);
           });
 
+          // Check if provider is Claude with tool support
+          const isClaudeWithTools = brainProviderId === 'claude' &&
+            'generateResponseStreamWithTools' in brainProvider &&
+            typeof brainProvider.generateResponseStreamWithTools === 'function';
+
           // Check if provider supports streaming
-          if ('generateResponseStream' in brainProvider && typeof brainProvider.generateResponseStream === 'function') {
-            // Use streaming response with timeout
+          if (isClaudeWithTools) {
+            // Use Claude streaming with tool support for real-time data
+            console.log('[Chat] Using Claude with tool support');
+            const responseStream = brainProvider.generateResponseStreamWithTools(
+              history,
+              undefined,
+              executeWebSearchTool
+            );
+
+            for await (const chunk of responseStream) {
+              if (!responseStarted) {
+                responseStarted = true;
+                clearTimeout(thinkingTimeout);
+              }
+
+              // Check if this is a tool status message
+              if (chunk.startsWith('[Fetching')) {
+                // Send as a special status event
+                const statusEvent = `data: ${JSON.stringify({ type: 'status', content: chunk })}\n\n`;
+                controller.enqueue(encoder.encode(statusEvent));
+              } else {
+                fullResponse += chunk;
+                // Send text chunk
+                const event = `data: ${JSON.stringify({ type: 'text', content: chunk })}\n\n`;
+                controller.enqueue(encoder.encode(event));
+              }
+
+              // Check hard timeout during streaming
+              if (Date.now() - startTime > HARD_TIMEOUT_MS) {
+                throw new Error('Response timeout');
+              }
+            }
+          } else if ('generateResponseStream' in brainProvider && typeof brainProvider.generateResponseStream === 'function') {
+            // Use standard streaming response with timeout
             const responseStream = brainProvider.generateResponseStream(history);
 
             for await (const chunk of responseStream) {
