@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, DragEvent } from 'react';
 
 interface Avatar {
   id: string;
   userId: string;
   modelUrl: string;
   thumbnailUrl: string | null;
+  inputPaths: string[];
   method: string;
   createdAt: string;
   completedAt: string | null;
@@ -34,6 +35,28 @@ interface AvatarPresetManagerProps {
   onPresetChange?: () => void;
 }
 
+// Helper to get proper thumbnail URL from Supabase storage path
+function getThumbnailUrl(avatar: Avatar): string | null {
+  // If we have a direct thumbnail URL that's a full URL, use it
+  if (avatar.thumbnailUrl && avatar.thumbnailUrl.startsWith('http')) {
+    return avatar.thumbnailUrl;
+  }
+
+  // Try to use the first input path (the uploaded image)
+  if (avatar.inputPaths && avatar.inputPaths.length > 0) {
+    const inputPath = avatar.inputPaths[0];
+    // If it's already a full URL, use it
+    if (inputPath.startsWith('http')) {
+      return inputPath;
+    }
+    // Otherwise construct the Supabase storage URL
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://fzubfmvpudwzjmtrqanw.supabase.co';
+    return `${supabaseUrl}/storage/v1/object/public/avatar-uploads/${inputPath}`;
+  }
+
+  return null;
+}
+
 export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps) {
   const [avatars, setAvatars] = useState<Avatar[]>([]);
   const [currentPresets, setCurrentPresets] = useState<Preset[]>([]);
@@ -43,6 +66,8 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
   const [selectedAvatar, setSelectedAvatar] = useState<Avatar | null>(null);
   const [assigningTo, setAssigningTo] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [draggedAvatar, setDraggedAvatar] = useState<Avatar | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
 
   // Load all avatars and current presets
   const loadAvatars = useCallback(async () => {
@@ -78,6 +103,9 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
     const slot = PRESET_SLOTS.find(s => s.id === presetSlotId);
     if (!slot) return;
 
+    // Get the proper thumbnail URL
+    const thumbnailUrl = getThumbnailUrl(avatar);
+
     try {
       const response = await fetch('/api/admin/avatars', {
         method: 'POST',
@@ -86,7 +114,7 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
           action: 'add_preset',
           avatarId: avatar.id,
           modelUrl: avatar.modelUrl,
-          thumbnailUrl: avatar.thumbnailUrl,
+          thumbnailUrl: thumbnailUrl,
           presetId: slot.id,
           presetName: slot.name,
         }),
@@ -167,6 +195,38 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
     }
   }, [loadAvatars, onPresetChange]);
 
+  // Drag and drop handlers
+  const handleDragStart = useCallback((e: DragEvent<HTMLDivElement>, avatar: Avatar) => {
+    setDraggedAvatar(avatar);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', avatar.id);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    setDraggedAvatar(null);
+    setDragOverSlot(null);
+  }, []);
+
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>, slotId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverSlot(slotId);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverSlot(null);
+  }, []);
+
+  const handleDrop = useCallback(async (e: DragEvent<HTMLDivElement>, slotId: string) => {
+    e.preventDefault();
+    setDragOverSlot(null);
+
+    if (!draggedAvatar) return;
+
+    await assignToPreset(draggedAvatar, slotId);
+    setDraggedAvatar(null);
+  }, [draggedAvatar, assignToPreset]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -201,19 +261,28 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
 
       {/* Current Preset Assignments */}
       <div className="glass-card p-4">
-        <h3 className="text-sm font-medium mb-4">Current Avatar Preset Assignments</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-medium">Current Avatar Preset Assignments</h3>
+          <span className="text-xs text-zenna-muted">Drag avatars here to assign</span>
+        </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {PRESET_SLOTS.map((slot) => {
             const preset = currentPresets.find(p => p.id === slot.id);
+            const isDragOver = dragOverSlot === slot.id;
 
             return (
               <div
                 key={slot.id}
-                className={`border rounded-lg p-3 transition-all ${
-                  preset
+                onDragOver={(e) => handleDragOver(e, slot.id)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, slot.id)}
+                className={`border-2 rounded-lg p-3 transition-all ${
+                  isDragOver
+                    ? 'border-zenna-accent bg-zenna-accent/20 scale-105'
+                    : preset
                     ? 'border-zenna-accent bg-zenna-accent/10'
-                    : 'border-zenna-border border-dashed bg-zenna-surface/50'
+                    : 'border-zenna-border border-dashed bg-zenna-surface/50 hover:border-zenna-accent/50'
                 }`}
               >
                 <div className="aspect-square mb-2 rounded-lg overflow-hidden bg-zenna-bg flex items-center justify-center">
@@ -222,6 +291,11 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
                       src={preset.thumbnailUrl}
                       alt={preset.name}
                       className="w-full h-full object-cover"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.style.display = 'none';
+                        target.parentElement!.innerHTML = '<span class="text-4xl text-zenna-muted opacity-30">?</span>';
+                      }}
                     />
                   ) : (
                     <span className="text-4xl text-zenna-muted opacity-30">?</span>
@@ -239,7 +313,9 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
                     Remove
                   </button>
                 ) : (
-                  <p className="text-xs text-zenna-muted italic">Not assigned</p>
+                  <p className="text-xs text-zenna-muted italic">
+                    {isDragOver ? 'Drop to assign' : 'Not assigned'}
+                  </p>
                 )}
               </div>
             );
@@ -266,57 +342,80 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
-            {avatars.map((avatar) => (
-              <div
-                key={avatar.id}
-                onClick={() => setSelectedAvatar(avatar)}
-                className={`relative cursor-pointer rounded-lg overflow-hidden border-2 transition-all hover:scale-105 ${
-                  selectedAvatar?.id === avatar.id
-                    ? 'border-zenna-accent ring-2 ring-zenna-accent/50'
-                    : avatar.isDefault
-                    ? 'border-green-500'
-                    : avatar.presetId
-                    ? 'border-blue-500'
-                    : 'border-zenna-border hover:border-zenna-accent/50'
-                }`}
-              >
-                <div className="aspect-square bg-zenna-surface">
-                  {avatar.thumbnailUrl ? (
-                    <img
-                      src={avatar.thumbnailUrl}
-                      alt="Avatar"
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <span className="text-2xl text-zenna-muted">3D</span>
-                    </div>
-                  )}
-                </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+            {avatars.map((avatar) => {
+              const thumbUrl = getThumbnailUrl(avatar);
+              const isDragging = draggedAvatar?.id === avatar.id;
 
-                {/* Status badges */}
-                <div className="absolute top-1 right-1 flex flex-col gap-1">
-                  {avatar.isDefault && (
-                    <span className="bg-green-500 text-white text-[8px] px-1 rounded">
-                      DEFAULT
-                    </span>
-                  )}
-                  {avatar.presetName && (
-                    <span className="bg-blue-500 text-white text-[8px] px-1 rounded truncate max-w-[60px]">
-                      {avatar.presetName}
-                    </span>
-                  )}
-                </div>
+              return (
+                <div
+                  key={avatar.id}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, avatar)}
+                  onDragEnd={handleDragEnd}
+                  onClick={() => setSelectedAvatar(avatar)}
+                  className={`relative cursor-grab active:cursor-grabbing rounded-xl overflow-hidden border-2 transition-all hover:scale-105 ${
+                    isDragging
+                      ? 'opacity-50 scale-95'
+                      : selectedAvatar?.id === avatar.id
+                      ? 'border-zenna-accent ring-2 ring-zenna-accent/50'
+                      : avatar.isDefault
+                      ? 'border-green-500'
+                      : avatar.presetId
+                      ? 'border-blue-500'
+                      : 'border-zenna-border hover:border-zenna-accent/50'
+                  }`}
+                >
+                  {/* Larger thumbnail - 150px min height */}
+                  <div className="aspect-square bg-zenna-surface min-h-[150px]">
+                    {thumbUrl ? (
+                      <img
+                        src={thumbUrl}
+                        alt="Avatar"
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          target.style.display = 'none';
+                          target.parentElement!.innerHTML = '<div class="w-full h-full flex items-center justify-center"><span class="text-3xl text-zenna-muted">3D</span></div>';
+                        }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <span className="text-3xl text-zenna-muted">3D</span>
+                      </div>
+                    )}
+                  </div>
 
-                {/* Date */}
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1">
-                  <p className="text-[8px] text-white/70 truncate">
-                    {new Date(avatar.createdAt).toLocaleDateString()}
-                  </p>
+                  {/* Drag hint */}
+                  <div className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <svg className="w-4 h-4 text-white/70" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8-12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/>
+                    </svg>
+                  </div>
+
+                  {/* Status badges */}
+                  <div className="absolute top-2 right-2 flex flex-col gap-1">
+                    {avatar.isDefault && (
+                      <span className="bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
+                        DEFAULT
+                      </span>
+                    )}
+                    {avatar.presetName && (
+                      <span className="bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded truncate max-w-[80px] font-medium">
+                        {avatar.presetName}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Date overlay */}
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                    <p className="text-[10px] text-white/80">
+                      {new Date(avatar.createdAt).toLocaleDateString()}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -327,12 +426,17 @@ export function AvatarPresetManager({ onPresetChange }: AvatarPresetManagerProps
           <div className="bg-zenna-surface border border-zenna-border rounded-2xl p-6 max-w-md w-full shadow-2xl">
             {/* Preview */}
             <div className="flex items-start gap-4 mb-6">
-              <div className="w-24 h-24 rounded-lg overflow-hidden bg-zenna-bg flex-shrink-0">
-                {selectedAvatar.thumbnailUrl ? (
+              <div className="w-32 h-32 rounded-lg overflow-hidden bg-zenna-bg flex-shrink-0">
+                {getThumbnailUrl(selectedAvatar) ? (
                   <img
-                    src={selectedAvatar.thumbnailUrl}
+                    src={getThumbnailUrl(selectedAvatar)!}
                     alt="Selected avatar"
                     className="w-full h-full object-cover"
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'none';
+                      target.parentElement!.innerHTML = '<div class="w-full h-full flex items-center justify-center"><span class="text-3xl text-zenna-muted">3D</span></div>';
+                    }}
                   />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
