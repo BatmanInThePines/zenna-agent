@@ -6,6 +6,178 @@ import { brainProviderFactory } from '@/core/providers/brain';
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
 
+/**
+ * Extract important facts from user messages
+ * Detects statements about family, preferences, personal info, etc.
+ */
+function extractFactsFromMessage(message: string): Array<{fact: string; topic: string; tags: string[]}> {
+  const facts: Array<{fact: string; topic: string; tags: string[]}> = [];
+  const lowerMessage = message.toLowerCase();
+
+  // Family member patterns - "my X is/are/was named Y" or "my X's name is Y"
+  const familyPatterns = [
+    // Direct name statements
+    /my\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner|grandfather|grandmother|grandpa|grandma|uncle|aunt|cousin)(?:'s)?\s+(?:name\s+)?(?:is|was|are)\s+([A-Z][a-zA-Z\s]+?)(?:\.|,|$|\s+and|\s+but|\s+who|\s+he|\s+she)/gi,
+    // "I have a X named Y"
+    /i\s+have\s+a\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner)(?:\s+(?:who\s+is\s+)?named|\s+called)\s+([A-Z][a-zA-Z\s]+?)(?:\.|,|$)/gi,
+    // "X is my Y" pattern
+    /([A-Z][a-zA-Z\s]+?)\s+is\s+my\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner|grandfather|grandmother)/gi,
+  ];
+
+  for (const pattern of familyPatterns) {
+    let match;
+    while ((match = pattern.exec(message)) !== null) {
+      const relation = match[1].toLowerCase();
+      const name = match[2]?.trim() || match[1]?.trim();
+      if (name && name.length > 1 && name.length < 50) {
+        // Normalize relation names
+        const normalizedRelation = relation.replace('dad', 'father').replace('mom', 'mother')
+          .replace('grandpa', 'grandfather').replace('grandma', 'grandmother');
+        facts.push({
+          fact: `User's ${normalizedRelation}'s name is ${name}`,
+          topic: 'family',
+          tags: ['family', normalizedRelation, 'personal']
+        });
+      }
+    }
+  }
+
+  // Name patterns - "my name is X" or "I'm X" or "call me X"
+  const namePatterns = [
+    /my\s+name\s+is\s+([A-Z][a-zA-Z\s]+?)(?:\.|,|$|\s+and|\s+but)/gi,
+    /(?:i'm|i\s+am)\s+([A-Z][a-zA-Z]+)(?:\.|,|$|\s+and|\s+but)/gi,
+    /(?:call\s+me|you\s+can\s+call\s+me)\s+([A-Z][a-zA-Z]+)/gi,
+  ];
+
+  for (const pattern of namePatterns) {
+    let match;
+    while ((match = pattern.exec(message)) !== null) {
+      const name = match[1]?.trim();
+      if (name && name.length > 1 && name.length < 30) {
+        facts.push({
+          fact: `User's name is ${name}`,
+          topic: 'personal',
+          tags: ['name', 'personal', 'identity']
+        });
+      }
+    }
+  }
+
+  // Location patterns - "I live in X" or "I'm from X"
+  const locationPatterns = [
+    /i\s+(?:live|reside)\s+in\s+([A-Z][a-zA-Z\s,]+?)(?:\.|$|\s+and|\s+but)/gi,
+    /i(?:'m|\s+am)\s+from\s+([A-Z][a-zA-Z\s,]+?)(?:\.|$|\s+and|\s+but)/gi,
+    /my\s+(?:home|house)\s+is\s+in\s+([A-Z][a-zA-Z\s,]+?)(?:\.|$)/gi,
+  ];
+
+  for (const pattern of locationPatterns) {
+    let match;
+    while ((match = pattern.exec(message)) !== null) {
+      const location = match[1]?.trim();
+      if (location && location.length > 2 && location.length < 100) {
+        facts.push({
+          fact: `User lives in ${location}`,
+          topic: 'location',
+          tags: ['location', 'personal', 'home']
+        });
+      }
+    }
+  }
+
+  // Work/Job patterns
+  const workPatterns = [
+    /i\s+(?:work|am\s+employed)\s+(?:at|for)\s+([A-Z][a-zA-Z\s&]+?)(?:\.|,|$|\s+as)/gi,
+    /i(?:'m|\s+am)\s+a(?:n)?\s+([a-zA-Z\s]+?)(?:\.|,|$|\s+at|\s+and|\s+but)/gi,
+    /my\s+(?:job|profession|occupation)\s+is\s+([a-zA-Z\s]+?)(?:\.|,|$)/gi,
+  ];
+
+  for (const pattern of workPatterns) {
+    let match;
+    while ((match = pattern.exec(message)) !== null) {
+      const work = match[1]?.trim();
+      if (work && work.length > 2 && work.length < 100) {
+        facts.push({
+          fact: `User works as/at ${work}`,
+          topic: 'work',
+          tags: ['work', 'career', 'personal']
+        });
+      }
+    }
+  }
+
+  // Birthday/Age patterns
+  const birthdayPatterns = [
+    /my\s+birthday\s+is\s+(?:on\s+)?([A-Za-z]+\s+\d+|\d+[\/\-]\d+)/gi,
+    /i\s+was\s+born\s+(?:on\s+)?([A-Za-z]+\s+\d+(?:,?\s*\d{4})?)/gi,
+    /i(?:'m|\s+am)\s+(\d+)\s+years?\s+old/gi,
+  ];
+
+  for (const pattern of birthdayPatterns) {
+    let match;
+    while ((match = pattern.exec(message)) !== null) {
+      const value = match[1]?.trim();
+      if (value) {
+        const isAge = /^\d+$/.test(value);
+        facts.push({
+          fact: isAge ? `User is ${value} years old` : `User's birthday is ${value}`,
+          topic: 'personal',
+          tags: ['birthday', 'age', 'personal']
+        });
+      }
+    }
+  }
+
+  // Pet patterns
+  const petPatterns = [
+    /i\s+have\s+a\s+(dog|cat|bird|fish|hamster|rabbit|pet)(?:\s+named|\s+called)?\s*([A-Z][a-zA-Z]*)?/gi,
+    /my\s+(dog|cat|bird|pet)(?:'s)?\s+(?:name\s+)?(?:is|was)\s+([A-Z][a-zA-Z]+)/gi,
+  ];
+
+  for (const pattern of petPatterns) {
+    let match;
+    while ((match = pattern.exec(message)) !== null) {
+      const petType = match[1]?.toLowerCase();
+      const petName = match[2]?.trim();
+      if (petType) {
+        const factText = petName
+          ? `User has a ${petType} named ${petName}`
+          : `User has a ${petType}`;
+        facts.push({
+          fact: factText,
+          topic: 'pets',
+          tags: ['pets', petType, 'personal']
+        });
+      }
+    }
+  }
+
+  // Preference patterns - "I love/like/prefer X"
+  if (lowerMessage.includes(' love ') || lowerMessage.includes(' like ') ||
+      lowerMessage.includes(' prefer ') || lowerMessage.includes(' favorite ')) {
+    const preferencePatterns = [
+      /i\s+(?:really\s+)?(?:love|like|prefer|enjoy)\s+([a-zA-Z\s]+?)(?:\.|,|$|\s+and|\s+but|\s+because)/gi,
+      /my\s+favorite\s+([a-zA-Z]+)\s+is\s+([a-zA-Z\s]+?)(?:\.|,|$)/gi,
+    ];
+
+    for (const pattern of preferencePatterns) {
+      let match;
+      while ((match = pattern.exec(message)) !== null) {
+        const preference = (match[2] || match[1])?.trim();
+        const category = match[2] ? match[1]?.trim() : 'thing';
+        if (preference && preference.length > 2 && preference.length < 50) {
+          facts.push({
+            fact: `User's favorite ${category} is ${preference}` || `User likes ${preference}`,
+            topic: 'preferences',
+            tags: ['preferences', category.toLowerCase(), 'personal']
+          });
+        }
+      }
+    }
+  }
+
+  return facts;
+}
+
 // Singleton memory service instance
 let memoryServiceInstance: MemoryService | null = null;
 
@@ -157,6 +329,25 @@ NEVER invent names or facts. If you don't know something, ask.`,
     // Don't save system messages like background noise detection
     if (!isBackgroundNoiseMessage) {
       await memoryService.addConversationTurn(userId, 'user', message);
+
+      // Extract and store important facts from user message
+      // This ensures facts like "My father's name is X" are stored as high-importance memories
+      const extractedFacts = extractFactsFromMessage(message);
+      if (extractedFacts.length > 0) {
+        console.log(`[Chat] Extracted ${extractedFacts.length} facts from user message:`, extractedFacts.map(f => f.fact));
+        for (const { fact, topic, tags } of extractedFacts) {
+          try {
+            await memoryService.storeImportantFact(userId, fact, {
+              topic,
+              tags,
+              importance: 0.95, // High importance for personal facts
+            });
+            console.log(`[Chat] Stored fact: "${fact}"`);
+          } catch (factError) {
+            console.error(`[Chat] Failed to store fact "${fact}":`, factError);
+          }
+        }
+      }
     }
 
     // Get brain provider - prefer Claude for better rate limits and quality
