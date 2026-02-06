@@ -310,7 +310,11 @@ export class MemoryService {
       types?: MemoryMetadata['type'][];
     }
   ): Promise<RelevantMemory[]> {
-    console.log(`[MemoryService] searchMemories called - longTermStore: ${!!this.longTermStore}, vectorProvider: ${this.vectorProvider}`);
+    console.log(`[MemoryService] searchMemories called:`);
+    console.log(`[MemoryService]   userId: ${userId}`);
+    console.log(`[MemoryService]   query: "${query.substring(0, 60)}..."`);
+    console.log(`[MemoryService]   longTermStore: ${!!this.longTermStore}`);
+    console.log(`[MemoryService]   vectorProvider: ${this.vectorProvider}`);
 
     if (!this.longTermStore) {
       console.log('[MemoryService] No long-term store - falling back to keyword search');
@@ -363,8 +367,8 @@ export class MemoryService {
     console.log(`[MemoryService] Vector provider: ${this.vectorProvider}, hasLongTermStore: ${!!this.longTermStore}`);
 
     const relevantMemories = await this.searchMemories(userId, currentMessage, {
-      topK: 15,
-      threshold: 0.5, // Lowered from 0.6 to catch more relevant memories
+      topK: 20,
+      threshold: 0.3, // Lowered significantly to catch more relevant memories
     });
 
     console.log(`[MemoryService] Found ${relevantMemories.length} relevant memories`);

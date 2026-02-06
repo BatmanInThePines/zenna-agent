@@ -1,5 +1,8 @@
 # Zenna Memory Architecture
 
+> **Last Updated**: February 6, 2026
+> **Version**: 1.1
+
 ## Core Principle
 
 **Memories are PERMANENT.** Zenna is built for longevity and lifelong AI companionship with never-ending memories. Every fact, preference, relationship, and experience shared with Zenna is treasured and remembered forever.

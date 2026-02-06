@@ -2,8 +2,8 @@
 
 > **Document Purpose**: This document provides a comprehensive technical overview of the Zenna Agent system for consumption by Anthropic Claude models (Sonnet/Opus) when evaluating future feature considerations.
 >
-> **Last Updated**: January 30, 2026
-> **Version**: 1.1
+> **Last Updated**: February 6, 2026
+> **Version**: 1.2
 
 ---
 
@@ -16,15 +16,17 @@
 5. [Frontend Architecture](#5-frontend-architecture)
 6. [Backend Architecture](#6-backend-architecture)
 7. [Database Schema](#7-database-schema)
-8. [External Services & Integrations](#8-external-services--integrations)
-9. [MCP & Claude Code Configuration](#9-mcp--claude-code-configuration)
-10. [Authentication & Security](#10-authentication--security)
-11. [Voice Pipeline](#11-voice-pipeline)
-12. [Avatar System](#12-avatar-system)
-13. [Smart Home Integration](#13-smart-home-integration)
-14. [Key Design Patterns](#14-key-design-patterns)
-15. [Environment Configuration](#15-environment-configuration)
-16. [Future Considerations](#16-future-considerations)
+8. [Memory System](#8-memory-system)
+9. [External App API (360Aware)](#9-external-app-api-360aware)
+10. [External Services & Integrations](#10-external-services--integrations)
+11. [MCP & Claude Code Configuration](#11-mcp--claude-code-configuration)
+12. [Authentication & Security](#12-authentication--security)
+13. [Voice Pipeline](#13-voice-pipeline)
+14. [Avatar System](#14-avatar-system)
+15. [Smart Home Integration](#15-smart-home-integration)
+16. [Key Design Patterns](#16-key-design-patterns)
+17. [Environment Configuration](#17-environment-configuration)
+18. [Future Considerations](#18-future-considerations)
 
 ---
 
@@ -32,15 +34,20 @@
 
 **Zenna** is a multi-user, voice-first AI assistant platform built on Next.js 14+ with the following core capabilities:
 
-- **Multi-User Support**: Complete user isolation with role-based access (user/father-admin)
+- **Multi-User Support**: Complete user isolation with role-based access (user/admin/father)
 - **Voice Conversation**: Real-time STT (Deepgram) → LLM → TTS (ElevenLabs) pipeline
-- **Multiple LLM Backends**: Gemini (default), Claude, OpenAI with user-configurable API keys
+- **Claude as Primary Brain**: Anthropic Claude Sonnet 4 as default LLM (better rate limits than Gemini free tier)
+- **Three-Tier Memory System**: Short-term (session), Long-term (Pinecone RAG), External context (Notion)
+- **External App API Access**: Partner app integration via shared secrets (e.g., 360Aware)
 - **Smart Home Control**: Philips Hue integration with natural language commands and scheduling
 - **Knowledge Integration**: Notion OAuth for external context injection
 - **3D Avatar Reconstruction**: Cloud-based image-to-3D pipeline via Replicate TRELLIS
 - **Animated Avatar Display**: Max Headroom-style motion engine for dynamic avatar presentation
+- **Subscription Management**: Stripe-powered tiered subscriptions with session limits
 
 **Primary Use Case**: Personal/family AI assistant with voice interaction, smart home control, and personalized responses based on user identity and external knowledge sources.
+
+**Secondary Use Case**: Backend AI service for partner applications (360Aware) with guardrailed system prompts.
 
 ---
 
@@ -93,9 +100,10 @@
 ### AI/ML Services
 | Service | Purpose | Model/Version |
 |---------|---------|---------------|
-| **Google Gemini** | Primary LLM | gemini-2.0-flash (default) |
-| **Anthropic Claude** | Alternative LLM | User-configured |
+| **Anthropic Claude** | Primary LLM | claude-sonnet-4-20250514 (default) |
+| **Google Gemini** | Fallback LLM | gemini-2.0-flash |
 | **OpenAI** | Alternative LLM | User-configured |
+| **Pinecone** | Vector Store (RAG) | Long-term memory |
 | **ElevenLabs** | Text-to-Speech | eleven_turbo_v2_5 |
 | **Deepgram** | Speech-to-Text | nova-2 |
 | **Replicate** | 3D Reconstruction | TRELLIS model |
@@ -171,7 +179,8 @@
 │  │                     Core Providers                               │    │
 │  ├─────────────────────────────────────────────────────────────────┤    │
 │  │ SupabaseIdentityStore │ Auth, sessions, user management         │    │
-│  │ BrainProviderFactory  │ LLM provider abstraction                │    │
+│  │ BrainProviderFactory  │ LLM provider abstraction (Claude/Gemini)│    │
+│  │ MemoryService         │ 3-tier memory (short/long/external)     │    │
 │  │ ElevenLabsTTS         │ Voice synthesis                         │    │
 │  │ DeepgramASR           │ Voice recognition                       │    │
 │  │ RoutineExecutor       │ Scheduled task execution                │    │
@@ -184,10 +193,12 @@
 ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
 │    SUPABASE     │  │  EXTERNAL APIs  │  │    REPLICATE    │
 ├─────────────────┤  ├─────────────────┤  ├─────────────────┤
-│ • PostgreSQL    │  │ • Gemini API    │  │ • TRELLIS Model │
-│ • Auth          │  │ • ElevenLabs    │  │ • Webhook       │
-│ • Storage       │  │ • Deepgram      │  │ • GPU Compute   │
-│ • RLS Policies  │  │ • Notion API    │  │                 │
+│ • PostgreSQL    │  │ • Claude API    │  │ • TRELLIS Model │
+│ • Auth          │  │ • Gemini API    │  │ • Webhook       │
+│ • Storage       │  │ • ElevenLabs    │  │ • GPU Compute   │
+│ • RLS Policies  │  │ • Deepgram      │  │                 │
+│                 │  │ • Pinecone      │  │                 │
+│                 │  │ • Notion API    │  │                 │
 │                 │  │ • Hue API       │  │                 │
 └─────────────────┘  └─────────────────┘  └─────────────────┘
 ```
@@ -687,6 +698,150 @@ interface Schedule {
 }
 ```
 
+#### `user_session_tracking` (Rate Limiting)
+```sql
+CREATE TABLE user_session_tracking (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  session_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, date)
+);
+
+CREATE INDEX idx_session_tracking_user_date ON user_session_tracking(user_id, date);
+```
+
+#### `user_consumption` (Usage Metrics)
+```sql
+CREATE TABLE user_consumption (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  api_calls INTEGER DEFAULT 0,
+  tokens_used INTEGER DEFAULT 0,
+  tts_characters INTEGER DEFAULT 0,
+  asr_minutes DECIMAL(10,2) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, date)
+);
+```
+
+#### `admin_audit_log`
+```sql
+CREATE TABLE admin_audit_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_id UUID REFERENCES users(id),
+  action VARCHAR(100) NOT NULL,  -- 'role_change', 'suspend', 'archive', 'export'
+  target_user_id UUID REFERENCES users(id),
+  details JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_admin ON admin_audit_log(admin_id);
+CREATE INDEX idx_audit_target ON admin_audit_log(target_user_id);
+```
+
+#### `data_export_requests` (GDPR Compliance)
+```sql
+CREATE TABLE data_export_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  status VARCHAR(50) DEFAULT 'pending',  -- pending | processing | ready | expired
+  download_url TEXT,
+  expires_at TIMESTAMPTZ,  -- 24 hours after ready
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### `accounts` (NextAuth OAuth)
+```sql
+CREATE TABLE accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  provider VARCHAR(100) NOT NULL,  -- 'google', 'github', 'apple'
+  provider_account_id VARCHAR(255) NOT NULL,
+  access_token TEXT,
+  refresh_token TEXT,
+  expires_at BIGINT,
+  token_type VARCHAR(50),
+  scope TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(provider, provider_account_id)
+);
+```
+
+### Helper Functions (PL/pgSQL)
+
+```sql
+-- Check if user has sessions remaining for their tier
+CREATE OR REPLACE FUNCTION check_session_limit(uid UUID, tier VARCHAR)
+RETURNS BOOLEAN AS $$
+DECLARE
+  today_count INTEGER;
+  tier_limit INTEGER;
+BEGIN
+  -- Get tier limit
+  tier_limit := CASE tier
+    WHEN 'trial' THEN 12
+    WHEN 'standard' THEN 50
+    WHEN 'pro' THEN 100
+    WHEN 'platinum' THEN 999999
+    ELSE 12
+  END;
+
+  -- Get today's count
+  SELECT COALESCE(session_count, 0) INTO today_count
+  FROM user_session_tracking
+  WHERE user_id = uid AND date = CURRENT_DATE;
+
+  RETURN COALESCE(today_count, 0) < tier_limit;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Increment session count for today
+CREATE OR REPLACE FUNCTION increment_session_count(uid UUID)
+RETURNS INTEGER AS $$
+DECLARE
+  new_count INTEGER;
+BEGIN
+  INSERT INTO user_session_tracking (user_id, date, session_count)
+  VALUES (uid, CURRENT_DATE, 1)
+  ON CONFLICT (user_id, date)
+  DO UPDATE SET session_count = user_session_tracking.session_count + 1
+  RETURNING session_count INTO new_count;
+
+  RETURN new_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Check trial status
+CREATE OR REPLACE FUNCTION check_trial_status(uid UUID)
+RETURNS JSONB AS $$
+DECLARE
+  sub RECORD;
+  days_remaining INTEGER;
+BEGIN
+  SELECT * INTO sub FROM subscriptions
+  WHERE user_id = uid AND tier = 'trial' AND status = 'active'
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN '{"active": false}'::jsonb;
+  END IF;
+
+  days_remaining := EXTRACT(DAY FROM sub.expires_at - NOW());
+
+  RETURN jsonb_build_object(
+    'active', true,
+    'days_remaining', days_remaining,
+    'expires_at', sub.expires_at,
+    'warning_sent', days_remaining <= 7
+  );
+END;
+$$ LANGUAGE plpgsql;
+```
+
 ### Supabase Storage Buckets
 
 | Bucket | Purpose | Access |
@@ -702,11 +857,346 @@ All tables have RLS enabled with policies ensuring:
 
 ---
 
-## 8. External Services & Integrations
+## 8. Memory System
+
+### Three-Tier Architecture
+
+Zenna implements a sophisticated three-tier memory system for context management:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      MEMORY ARCHITECTURE                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  TIER 1: SHORT-TERM (Session)                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ • session_turns table                                            │   │
+│  │ • Limited to 50 turns per session                                │   │
+│  │ • Immediate context for current conversation                     │   │
+│  │ • Cleared on session end/logout                                  │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              │                                          │
+│                              ▼                                          │
+│  TIER 2: LONG-TERM (RAG)                                               │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ • Pinecone vector store                                          │   │
+│  │ • Semantic search over conversation history                      │   │
+│  │ • OpenAI/Gemini embeddings                                       │   │
+│  │ • Persists across sessions                                       │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              │                                          │
+│                              ▼                                          │
+│  TIER 3: EXTERNAL CONTEXT                                              │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ • Notion integration                                             │   │
+│  │ • NotebookLM (future)                                            │   │
+│  │ • User's external knowledge sources                              │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Memory Providers
+
+**Location**: `/src/core/providers/memory/`
+
+#### Short-Term Store (SupabaseShortTermStore)
+```typescript
+class SupabaseShortTermStore {
+  // Store current session context
+  addTurn(sessionId: string, role: string, content: string): Promise<void>
+
+  // Retrieve recent history (max 50 turns)
+  getHistory(sessionId: string, limit?: number): Promise<Turn[]>
+
+  // Trim old turns to prevent context overflow
+  trimHistory(sessionId: string, maxTurns: number): Promise<void>
+}
+```
+
+#### Long-Term Store (PineconeLongTermStore)
+```typescript
+class PineconeLongTermStore {
+  // Store conversation for future retrieval
+  store(userId: string, content: string, metadata: object): Promise<void>
+
+  // Semantic search for relevant memories
+  search(userId: string, query: string, limit?: number): Promise<Memory[]>
+
+  // Delete user's memories (GDPR compliance)
+  deleteAll(userId: string): Promise<void>
+}
+```
+
+#### External Context Store (StubExternalContextStore)
+```typescript
+// Stubbed for v2 - will integrate with Notion/NotebookLM
+class StubExternalContextStore {
+  getContext(userId: string): Promise<string | null>
+}
+```
+
+### Memory Service Flow
+
+```typescript
+// src/core/services/memory-service.ts
+class MemoryService {
+  async buildContext(userId: string, query: string): Promise<Message[]> {
+    // 1. Search long-term memory for relevant past conversations
+    const memories = await this.longTermStore.search(userId, query, 5);
+
+    // 2. Get recent session history
+    const recentHistory = await this.shortTermStore.getHistory(sessionId, 50);
+
+    // 3. Get external context (Notion, etc.)
+    const externalContext = await this.externalStore.getContext(userId);
+
+    // 4. Combine into context messages
+    return [
+      { role: 'system', content: `Relevant memories:\n${memories.join('\n')}` },
+      { role: 'system', content: externalContext || '' },
+      ...recentHistory
+    ];
+  }
+
+  async saveInteraction(userId: string, userMessage: string, assistantResponse: string): Promise<void> {
+    // Save to both short-term (immediate) and long-term (RAG)
+    await this.shortTermStore.addTurn(sessionId, 'user', userMessage);
+    await this.shortTermStore.addTurn(sessionId, 'assistant', assistantResponse);
+    await this.longTermStore.store(userId, `User: ${userMessage}\nAssistant: ${assistantResponse}`, {
+      timestamp: Date.now(),
+      sessionId
+    });
+  }
+}
+```
+
+### Database Tables for Memory
+
+#### `user_memories`
+```sql
+CREATE TABLE user_memories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  storage_size_bytes BIGINT DEFAULT 0,
+  pinecone_namespace TEXT,
+  last_sync_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Embedding Providers
+
+| Provider | Use Case | Model |
+|----------|----------|-------|
+| OpenAI | Primary embeddings | text-embedding-3-small |
+| Gemini | Fallback | embedding-001 |
+
+---
+
+## 9. External App API (360Aware)
+
+### Overview
+
+Zenna provides API access for partner applications like **360Aware** (a driving safety app). External apps authenticate via shared secrets and receive guardrailed responses that hide Zenna branding.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    EXTERNAL APP INTEGRATION                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  360AWARE APP                           ZENNA BACKEND                   │
+│  ┌─────────────┐                       ┌─────────────┐                 │
+│  │   Mobile    │                       │    API      │                 │
+│  │    App      │──────────────────────▶│   Routes    │                 │
+│  │             │   x-zenna-auth        │             │                 │
+│  └─────────────┘   header              └──────┬──────┘                 │
+│        │                                      │                         │
+│        │                                      ▼                         │
+│        │                               ┌─────────────┐                 │
+│        │                               │  Product    │                 │
+│        │                               │  Config     │                 │
+│        │                               │ (guardrails)│                 │
+│        │                               └──────┬──────┘                 │
+│        │                                      │                         │
+│        │                                      ▼                         │
+│        │                               ┌─────────────┐                 │
+│        ▼                               │   Claude    │                 │
+│  ┌─────────────┐                       │    LLM      │                 │
+│  │  Response   │◀──────────────────────│  (guarded)  │                 │
+│  │  (filtered) │                       └─────────────┘                 │
+│  └─────────────┘                                                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Authentication
+
+External apps authenticate using a shared secret header:
+
+```typescript
+// Request from 360Aware
+POST /api/zenna/chat
+Headers:
+  x-zenna-auth: ${THREESIXTY_AWARE_SHARED_SECRET}
+  Content-Type: application/json
+
+Body: {
+  message: "What hazards are ahead?",
+  productContext: {
+    productId: "360aware",
+    location: { lat: 37.7749, lng: -122.4194 },
+    heading: 180
+  }
+}
+```
+
+### Product Configuration
+
+**Location**: `/src/core/products/360aware.ts`
+
+```typescript
+interface ProductConfig {
+  productId: string;
+  systemPrompt: string;
+  guardrails: {
+    blockedTopics: string[];
+    allowedActions: string[];
+  };
+  immutableRules: string[];
+}
+
+const threeSixtyAwareConfig: ProductConfig = {
+  productId: '360aware',
+  systemPrompt: `You are 360Aware, a driving safety assistant...`,
+  guardrails: {
+    blockedTopics: ['zenna', 'anthropic', 'internal systems'],
+    allowedActions: ['nearby_hazards', 'enforcement', 'collisions', 'road_info']
+  },
+  immutableRules: [
+    'NEVER reveal you are powered by Zenna',
+    'NEVER mention Anthropic or Claude',
+    'Always respond as 360Aware'
+  ]
+};
+```
+
+### Action Types
+
+360Aware supports specialized action blocks:
+
+```typescript
+// Query types for driving context
+type QueryType =
+  | 'nearby_hazards'    // Road hazards, construction, accidents
+  | 'enforcement'       // Speed traps, police activity
+  | 'collisions'        // Recent accident data
+  | 'road_info';        // Road conditions, closures
+
+// Response includes map highlights
+interface ActionResponse {
+  action: 'highlight_map';
+  locations: Array<{
+    lat: number;
+    lng: number;
+    type: QueryType;
+    description: string;
+  }>;
+}
+```
+
+### Action Handler
+
+**Location**: `/src/core/actions/360aware-handler.ts`
+
+```typescript
+class ThreeSixtyAwareHandler {
+  async handleAction(
+    action: string,
+    params: object,
+    context: ProductContext
+  ): Promise<ActionResponse> {
+    switch (action) {
+      case 'nearby_hazards':
+        return this.queryHazards(context.location, context.heading);
+      case 'enforcement':
+        return this.queryEnforcement(context.location);
+      // ... other actions
+    }
+  }
+}
+```
+
+### API Client
+
+**Location**: `/src/lib/360aware-api.ts`
+
+```typescript
+// Used by 360Aware mobile app
+class ThreeSixtyAwareAPI {
+  constructor(private sharedSecret: string) {}
+
+  async chat(message: string, location: Location, heading: number): Promise<Response> {
+    return fetch('/api/zenna/chat', {
+      method: 'POST',
+      headers: {
+        'x-zenna-auth': this.sharedSecret,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message,
+        productContext: {
+          productId: '360aware',
+          location,
+          heading
+        }
+      })
+    });
+  }
+}
+```
+
+### Environment Variables
+
+```bash
+# 360Aware Integration
+THREESIXTY_AWARE_SHARED_SECRET=    # Shared secret for API auth
+```
+
+---
+
+## 10. External Services & Integrations
 
 ### LLM Providers
 
-#### Google Gemini (Default)
+#### Anthropic Claude (Default)
+```typescript
+Provider: @anthropic-ai/sdk
+Model: claude-sonnet-4-20250514
+Config:
+  - max_tokens: 2048
+  - temperature: 0.2 (low for strict system prompt adherence)
+Features:
+  - Streaming support via generateResponseStream()
+  - Better rate limits than Gemini free tier (60 RPM vs 4 RPM)
+  - Used when ANTHROPIC_API_KEY is set
+
+Selection Logic:
+  // In chat/route.ts
+  if (process.env.ANTHROPIC_API_KEY) {
+    brainProviderId = 'claude';
+  }
+
+Message Handling:
+  - System messages extracted and combined
+  - First message must be 'user' role (enforced)
+  - Consecutive same-role messages are merged
+  - Assistant messages at conversation start filtered
+```
+
+#### Google Gemini (Fallback)
 ```typescript
 Provider: @google/generative-ai
 Models:
@@ -717,14 +1207,7 @@ Config:
   - temperature: 0.7
 Features:
   - Streaming support via generateResponseStream()
-  - Function calling (future consideration)
-```
-
-#### Anthropic Claude
-```typescript
-Provider: @anthropic-ai/sdk
-Config: User-provided API key in settings
-Usage: Alternative LLM when user prefers Claude
+  - Used when ANTHROPIC_API_KEY not available
 ```
 
 #### OpenAI
@@ -866,7 +1349,7 @@ Cost: ~$0.043/reconstruction (A100 GPU)
 
 ---
 
-## 9. MCP & Claude Code Configuration
+## 11. MCP & Claude Code Configuration
 
 ### MCP Servers
 
@@ -946,7 +1429,7 @@ Zenna uses MCP (Model Context Protocol) servers for enhanced development capabil
 
 ---
 
-## 10. Authentication & Security
+## 12. Authentication & Security
 
 ### Authentication Architecture (NextAuth.js v5)
 
@@ -1209,7 +1692,7 @@ async isFather(userId: string): Promise<boolean> {
 
 ---
 
-## 11. Voice Pipeline
+## 13. Voice Pipeline
 
 ### Architecture
 
@@ -1284,7 +1767,7 @@ type ConversationState =
 
 ---
 
-## 12. Avatar System
+## 14. Avatar System
 
 ### Max Headroom Motion Engine
 
@@ -1363,7 +1846,7 @@ type JobStatus =
 
 ---
 
-## 13. Smart Home Integration
+## 15. Smart Home Integration
 
 ### Philips Hue Architecture
 
@@ -1434,7 +1917,7 @@ The backend:
 
 ---
 
-## 14. Key Design Patterns
+## 16. Key Design Patterns
 
 ### Provider Factory Pattern
 
@@ -1462,15 +1945,18 @@ class NewProvider implements BrainProvider {
 // - Auditable action history
 ```
 
-### Session-Based Context
+### Three-Tier Memory Context
 
 ```typescript
-// Short-term: session_turns table (40 turn limit)
-// Long-term: Pinecone RAG (future)
+// Tier 1: Short-term - session_turns table (50 turn limit)
+// Tier 2: Long-term - Pinecone RAG (semantic search)
+// Tier 3: External - Notion integration
 
-// Each session maintains conversation context
-// Automatic trimming prevents token overflow
-// User can start fresh by logging out/in
+// Memory Service builds context:
+// 1. Semantic search on query → retrieve relevant memories
+// 2. Inject memories as system message
+// 3. Add recent history (last 50 turns)
+// 4. All responses saved to both Supabase and Pinecone
 ```
 
 ### Multi-Tenant Isolation
@@ -1497,7 +1983,7 @@ class NewProvider implements BrainProvider {
 
 ---
 
-## 15. Environment Configuration
+## 17. Environment Configuration
 
 ### Required Variables
 
@@ -1549,10 +2035,13 @@ HUE_APP_ID=                     # Hue app identifier
 REPLICATE_API_TOKEN=
 REPLICATE_WEBHOOK_SECRET=       # Webhook signature validation
 
-# Long-term Memory (future)
+# Long-term Memory (Pinecone RAG)
 PINECONE_API_KEY=
 PINECONE_INDEX=
 PINECONE_ENVIRONMENT=
+
+# External App API (360Aware)
+THREESIXTY_AWARE_SHARED_SECRET=   # Shared secret for 360Aware auth
 
 # Cron Jobs
 CRON_SECRET=                    # Bearer token for /api/routines/execute
@@ -1563,14 +2052,34 @@ NEXT_PUBLIC_APP_URL=            # Base URL for callbacks
 
 ---
 
-## 16. Future Considerations
+## 18. Future Considerations
+
+### Recently Completed (v1.2)
+
+1. **✅ Long-Term Memory (RAG)**
+   - Pinecone vector store integration
+   - Semantic search over conversation history
+   - OpenAI/Gemini embeddings
+
+2. **✅ Claude as Primary Brain**
+   - Better rate limits (60 RPM vs 4 RPM)
+   - Lower temperature for strict prompt adherence
+
+3. **✅ External App API**
+   - 360Aware integration with guardrailed prompts
+   - Shared secret authentication
+   - Product-specific system prompts
+
+4. **✅ Subscription System**
+   - Stripe integration
+   - Tiered session limits
+   - Usage tracking
 
 ### Planned Enhancements
 
-1. **Long-Term Memory (RAG)**
-   - Pinecone vector store integration
-   - Conversation summarization
-   - User preference learning
+1. **Additional Partner Apps**
+   - Extend 360Aware pattern to other products
+   - Per-app billing and analytics
 
 2. **Additional Smart Home**
    - Spotify integration
@@ -1581,6 +2090,7 @@ NEXT_PUBLIC_APP_URL=            # Base URL for callbacks
    - Wake word detection
    - Multi-speaker recognition
    - Emotion-aware TTS
+   - Voice command shortcuts (mute, stop listening)
 
 4. **Avatar Improvements**
    - Real-time lip sync
@@ -1597,15 +2107,17 @@ NEXT_PUBLIC_APP_URL=            # Base URL for callbacks
 1. Implement HMAC-SHA256 webhook signature validation
 2. Add comprehensive error boundaries
 3. Implement retry logic for external APIs
-4. Add rate limiting
+4. ~~Add rate limiting~~ ✅ Implemented via session tracking
 5. Improve session cleanup automation
+6. Add Pinecone namespace cleanup on user deletion
 
 ### Scalability Considerations
 
-- Current: Single Supabase instance, Vercel serverless
+- Current: Single Supabase instance, Vercel serverless, Pinecone
 - Future: Consider edge functions for voice processing
 - Future: Redis for session caching
 - Future: Dedicated GPU for faster reconstruction
+- Future: Multi-region Pinecone deployment
 
 ---
 
@@ -1614,10 +2126,27 @@ NEXT_PUBLIC_APP_URL=            # Base URL for callbacks
 ```yaml
 document_type: technical_architecture
 target_audience: claude_models
-version: 1.0
+version: 1.2
 created: 2026-01
+updated: 2026-02-06
 project: zenna-agent
 repository: https://github.com/[user]/zenna-agent
+
+changelog:
+  v1.2 (2026-02-06):
+    - Added Claude as primary brain provider (claude-sonnet-4-20250514)
+    - Added three-tier memory system (short-term, Pinecone RAG, external)
+    - Added 360Aware external app API integration
+    - Added admin audit logging and GDPR data export
+    - Added session tracking and rate limiting tables
+    - Added helper PL/pgSQL functions for session limits
+    - Updated subscription system documentation
+  v1.1 (2026-01-30):
+    - Added NextAuth.js v5 documentation
+    - Added subscription tiers and Stripe integration
+    - Added admin routes
+  v1.0 (2026-01):
+    - Initial architecture document
 ```
 
 ---

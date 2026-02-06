@@ -1,5 +1,8 @@
 # ZENNA Avatar V2 - Architecture Documentation
 
+> **Last Updated**: February 6, 2026
+> **Version**: 2.1
+
 ## Overview
 
 ZENNA Avatar V2 is a fully open-source 3D avatar system designed for real-time AI companion applications. It replaces the previous 2D canvas-based avatar with a WebGL-powered 3D rendering system while maintaining backwards compatibility.
@@ -12,8 +15,7 @@ ZENNA Avatar V2 is a fully open-source 3D avatar system designed for real-time A
 | Model Format | GLB/glTF 2.0 | Khronos |
 | Animation | Morph targets / Blendshapes | - |
 | Lip-sync | Custom audio analyzer | - |
-| Reconstruction (Single) | PIFuHD / PIFuXR | Apache 2.0 |
-| Reconstruction (Multi) | Meshroom / OpenMVG+OpenMVS | MPL 2.0 |
+| Reconstruction | Replicate TRELLIS | Commercial |
 | Backend | Next.js API Routes | MIT |
 | Storage | Local FS / S3-compatible | - |
 

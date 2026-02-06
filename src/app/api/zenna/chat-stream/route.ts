@@ -86,7 +86,9 @@ export async function POST(request: NextRequest) {
     ];
 
     // Inject relevant memories from semantic search (ElevenLabs best practice: retrieveMemories at start of turn)
+    console.log(`[Chat] Searching memories for userId: ${userId}, query: "${message.substring(0, 50)}..."`);
     const memoryContext = await memoryService.buildMemoryContext(userId, message);
+    console.log(`[Chat] Memory context result: ${memoryContext ? `Found ${memoryContext.length} chars` : 'NULL - no memories found'}`);
     if (memoryContext) {
       // ElevenLabs pattern: Inject memory context as a separate system message
       // This ensures the LLM has access to relevant past information
