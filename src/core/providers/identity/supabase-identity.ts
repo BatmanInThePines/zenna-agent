@@ -167,11 +167,12 @@ export class SupabaseIdentityStore implements IdentityStore {
         settings: {
           personalPrompt: '',
           preferredBrainProvider: 'claude',
+          // Track headless status in settings until DB migration
+          _headless: true,
+          _linkedProductId: productId,
+          _linkedUserId: externalUserId,
           ...settings,
         },
-        is_headless: true,
-        linked_product_id: productId,
-        linked_user_id: externalUserId,
       })
       .select()
       .single();
