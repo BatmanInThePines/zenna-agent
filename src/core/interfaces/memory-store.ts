@@ -27,14 +27,42 @@ export interface MemoryEntry {
 }
 
 export interface MemoryMetadata {
-  type: 'conversation' | 'fact' | 'preference' | 'context';
+  type: 'conversation' | 'fact' | 'preference' | 'context' | 'internet_search' | 'smart_home';
   conversationId?: string;
   topic?: string;
   sentiment?: 'positive' | 'negative' | 'neutral';
   importance?: number; // 0-1 scale
   source?: 'user' | 'assistant' | 'system' | 'external';
   tags?: string[];
+
+  // Memory Classification Tags (BUG 3 - Internet Memory Persistence)
+  contextSource?: MemoryContextSource;
+
+  // Internet Search Metadata
+  searchQuery?: string;        // Original query for internet searches
+  searchSource?: string;       // e.g., "wttr.in", "Google News", "DuckDuckGo"
+  retrievedAt?: string;        // ISO timestamp of retrieval
+
+  // Smart Home Metadata
+  deviceType?: string;         // e.g., "light", "thermostat", "lock"
+  deviceCommand?: string;      // e.g., "turn_on", "set_temperature"
+
+  // Cross-Platform Context
+  platformSource?: '360aware' | 'zenna_web' | 'zenna_mobile' | 'api';
 }
+
+/**
+ * Memory Context Source Classification
+ * Used for filtering and retrieval prioritization
+ */
+export type MemoryContextSource =
+  | 'companion_conversation'   // Standard dialogue interactions
+  | 'internet_search'          // Web retrieval results
+  | 'smart_home'              // IoT commands and automation
+  | '360aware'                // Cross-platform from 360aware.com.au
+  | 'personal_fact'           // Extracted personal information
+  | 'user_preference'         // User preferences and likes
+  | 'external_knowledge';     // NotebookLM, Notion, etc.
 
 export interface ConversationTurn {
   id: string;

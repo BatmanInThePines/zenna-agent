@@ -381,6 +381,7 @@ NEVER invent names or facts. If you don't know something, ask.`,
     });
 
     // Tool execution function for web searches
+    // BUG 3 FIX: Store internet search results in memory for future recall
     const executeWebSearchTool = async (toolName: string, input: Record<string, unknown>): Promise<string> => {
       if (toolName === 'web_search') {
         try {
@@ -388,18 +389,36 @@ NEVER invent names or facts. If you don't know something, ask.`,
             ? `https://${process.env.VERCEL_URL}`
             : process.env.NEXTAUTH_URL || 'http://localhost:3000';
 
+          const searchQuery = input.query as string;
+          const searchType = input.type as 'weather' | 'news' | 'time' | 'general';
+
           const response = await fetch(`${baseUrl}/api/zenna/web-search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              query: input.query,
-              type: input.type,
+              query: searchQuery,
+              type: searchType,
             }),
           });
 
           const result = await response.json();
           if (result.success) {
-            return `${result.data}\n(Source: ${result.source})`;
+            const resultText = `${result.data}\n(Source: ${result.source})`;
+
+            // BUG 3 FIX: Store internet search in memory for future recall
+            try {
+              await memoryService.storeInternetSearch(userId, searchQuery, result.data, {
+                searchSource: result.source || 'web',
+                searchType: searchType,
+                topic: searchType,
+              });
+              console.log(`[Chat] Stored internet search in memory: "${searchQuery}"`);
+            } catch (memError) {
+              console.error('[Chat] Failed to store internet search in memory:', memError);
+              // Don't fail the search just because memory storage failed
+            }
+
+            return resultText;
           } else {
             return result.error || 'Search failed';
           }

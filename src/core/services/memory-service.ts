@@ -203,6 +203,7 @@ export class MemoryService {
       importance?: number;
       tags?: string[];
       topic?: string;
+      platformSource?: '360aware' | 'zenna_web' | 'zenna_mobile' | 'api';
     }
   ): Promise<void> {
     // Use userId as sessionId - the session_turns table expects UUID format
@@ -224,6 +225,8 @@ export class MemoryService {
             importance: metadata?.importance,
             tags: metadata?.tags,
             topic: metadata?.topic,
+            contextSource: 'companion_conversation', // BUG 3 FIX: Tag for memory classification
+            platformSource: metadata?.platformSource || 'zenna_web',
           },
         });
       } catch (error) {
@@ -262,6 +265,7 @@ export class MemoryService {
         importance: options?.importance ?? 0.9, // Facts are high importance by default
         tags: options?.tags,
         topic: options?.topic,
+        contextSource: 'personal_fact', // BUG 3 FIX: Tag for memory classification
       },
     });
   }
@@ -293,6 +297,86 @@ export class MemoryService {
         importance: 0.8,
         tags: options?.tags,
         topic: options?.topic,
+        contextSource: 'user_preference',
+      },
+    });
+  }
+
+  /**
+   * Store an internet search result as a memory
+   * BUG 3 FIX: Internet searches now persist to memory with proper tagging
+   */
+  async storeInternetSearch(
+    userId: string,
+    query: string,
+    result: string,
+    options: {
+      searchSource: string;        // e.g., "wttr.in", "Google News"
+      searchType: 'weather' | 'news' | 'time' | 'general';
+      topic?: string;
+    }
+  ): Promise<MemoryEntry | null> {
+    if (!this.longTermStore) {
+      console.warn('[MemoryService] Vector store not configured - internet search not persisted');
+      return null;
+    }
+
+    const content = `[Internet Search] Query: "${query}" | Result: ${result}`;
+
+    console.log(`[MemoryService] Storing internet search: "${query}" from ${options.searchSource}`);
+
+    return this.longTermStore.store({
+      userId,
+      content,
+      metadata: {
+        type: 'internet_search',
+        source: 'external',
+        importance: 0.6, // Medium importance - can be recalled but not as critical as personal facts
+        tags: ['internet', options.searchType, options.searchSource.toLowerCase().replace(/\s+/g, '_')],
+        topic: options.topic || options.searchType,
+        contextSource: 'internet_search',
+        searchQuery: query,
+        searchSource: options.searchSource,
+        retrievedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  /**
+   * Store a smart home interaction as a memory
+   * BUG 3 FIX: Smart home commands persist to memory
+   */
+  async storeSmartHomeInteraction(
+    userId: string,
+    command: string,
+    result: string,
+    options: {
+      deviceType: string;
+      deviceCommand: string;
+      deviceName?: string;
+    }
+  ): Promise<MemoryEntry | null> {
+    if (!this.longTermStore) {
+      console.warn('[MemoryService] Vector store not configured - smart home command not persisted');
+      return null;
+    }
+
+    const content = `[Smart Home] ${options.deviceName || options.deviceType}: ${command} → ${result}`;
+
+    console.log(`[MemoryService] Storing smart home command: ${options.deviceCommand} on ${options.deviceType}`);
+
+    return this.longTermStore.store({
+      userId,
+      content,
+      metadata: {
+        type: 'smart_home',
+        source: 'system',
+        importance: 0.5, // Lower importance - routine commands
+        tags: ['smart_home', options.deviceType, options.deviceCommand],
+        topic: 'smart-home-control',
+        contextSource: 'smart_home',
+        deviceType: options.deviceType,
+        deviceCommand: options.deviceCommand,
       },
     });
   }
