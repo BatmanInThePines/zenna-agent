@@ -86,6 +86,24 @@ export interface UserSettings {
     country?: string;
     updatedAt?: string;
   };
+
+  // Search Preferences (for personalized Google search)
+  searchPreferences?: {
+    // Incognito mode: use generic API instead of personalized results
+    incognitoMode?: boolean;
+
+    // Language preference for search results (ISO 639-1, e.g., "en", "es", "fr")
+    language?: string;
+
+    // Country/region for localized results (ISO 3166-1 alpha-2, e.g., "US", "GB", "AU")
+    countryCode?: string;
+
+    // Safe search level
+    safeSearch?: 'off' | 'medium' | 'high';
+
+    // Whether to use user's location for local search results
+    useLocationForSearch?: boolean;
+  };
 }
 
 export interface UserSession {

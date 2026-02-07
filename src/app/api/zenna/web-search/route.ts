@@ -1,13 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
+import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
 
 /**
  * Web Search API Endpoint
  *
- * Uses DuckDuckGo's instant answer API for real-time information.
- * This is a free, no-API-key-required search solution.
+ * Supports multiple search providers:
+ * 1. Google Programmable Search Engine (PSE) - for general queries with user preferences
+ * 2. wttr.in - for weather data (free, no API key)
+ * 3. Google News RSS - for news (free, no API key)
+ * 4. DuckDuckGo - fallback for general queries (free, no API key)
  *
- * For weather, we use wttr.in which provides free weather data.
+ * User Personalization:
+ * - If user has incognitoMode disabled, searches use their location/language preferences
+ * - If incognitoMode enabled, searches are anonymous (no personalization)
  */
+
+interface SearchPreferences {
+  incognitoMode?: boolean;
+  language?: string;
+  countryCode?: string;
+  safeSearch?: 'off' | 'medium' | 'high';
+  useLocationForSearch?: boolean;
+  userLocation?: {
+    city?: string;
+    region?: string;
+    country?: string;
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { query, type } = await request.json();
@@ -16,21 +37,61 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Query required' }, { status: 400 });
     }
 
+    // Get user preferences for personalized search
+    let searchPreferences: SearchPreferences = {
+      incognitoMode: true, // Default to anonymous if not logged in
+      language: 'en',
+      countryCode: 'US',
+      safeSearch: 'medium',
+    };
+
+    try {
+      const session = await auth();
+      if (session?.user?.id) {
+        const identityStore = new SupabaseIdentityStore({
+          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+          jwtSecret: process.env.AUTH_SECRET!,
+        });
+
+        const user = await identityStore.getUser(session.user.id);
+        if (user?.settings) {
+          const prefs = user.settings.searchPreferences;
+          const location = user.settings.location;
+
+          searchPreferences = {
+            incognitoMode: prefs?.incognitoMode ?? false, // Default to personalized
+            language: prefs?.language || 'en',
+            countryCode: prefs?.countryCode || location?.country || 'US',
+            safeSearch: prefs?.safeSearch || 'medium',
+            useLocationForSearch: prefs?.useLocationForSearch ?? true,
+            userLocation: location ? {
+              city: location.city,
+              region: location.region,
+              country: location.country,
+            } : undefined,
+          };
+        }
+      }
+    } catch (authError) {
+      console.warn('[WebSearch] Could not get user preferences, using defaults:', authError);
+    }
+
     let result: SearchResult;
 
     // Route to appropriate search handler based on type
     switch (type) {
       case 'weather':
-        result = await fetchWeather(query);
+        result = await fetchWeather(query, searchPreferences);
         break;
       case 'time':
         result = await fetchTime(query);
         break;
       case 'news':
-        result = await fetchNews(query);
+        result = await fetchNews(query, searchPreferences);
         break;
       default:
-        result = await fetchGeneral(query);
+        result = await fetchGeneral(query, searchPreferences);
     }
 
     return NextResponse.json(result);
@@ -48,21 +109,34 @@ interface SearchResult {
   data?: string;
   source?: string;
   error?: string;
+  personalized?: boolean; // Indicates if results were personalized
 }
 
 /**
  * Fetch weather data from wttr.in (free, no API key needed)
+ * Uses user's location if available and not in incognito mode
  */
-async function fetchWeather(location: string): Promise<SearchResult> {
+async function fetchWeather(location: string, prefs: SearchPreferences): Promise<SearchResult> {
   try {
+    // If user hasn't specified a location and we have their location, use it
+    let searchLocation = location;
+    if (!prefs.incognitoMode && prefs.useLocationForSearch && prefs.userLocation?.city) {
+      // If the query seems to be asking about "here" or "my location", use user's location
+      const localTerms = ['here', 'my location', 'local', 'nearby', 'my area'];
+      if (localTerms.some(term => location.toLowerCase().includes(term))) {
+        searchLocation = [prefs.userLocation.city, prefs.userLocation.region, prefs.userLocation.country]
+          .filter(Boolean).join(', ');
+      }
+    }
+
     // wttr.in provides weather in a simple format
-    // Format: ?format=... for custom output
     const weatherFormat = '%l:+%c+%t,+feels+like+%f.+%C.+Humidity:+%h.+Wind:+%w.+Precipitation:+%p';
-    const url = `https://wttr.in/${encodeURIComponent(location)}?format=${encodeURIComponent(weatherFormat)}`;
+    const url = `https://wttr.in/${encodeURIComponent(searchLocation)}?format=${encodeURIComponent(weatherFormat)}`;
 
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Zenna-AI-Companion/1.0',
+        'Accept-Language': prefs.language || 'en',
       },
     });
 
@@ -73,7 +147,7 @@ async function fetchWeather(location: string): Promise<SearchResult> {
     const weatherText = await response.text();
 
     // Also fetch forecast
-    const forecastUrl = `https://wttr.in/${encodeURIComponent(location)}?format=%l:+Tomorrow:+%c+%t`;
+    const forecastUrl = `https://wttr.in/${encodeURIComponent(searchLocation)}?format=%l:+Tomorrow:+%c+%t`;
     const forecastResponse = await fetch(forecastUrl, {
       headers: {
         'User-Agent': 'Zenna-AI-Companion/1.0',
@@ -89,6 +163,7 @@ async function fetchWeather(location: string): Promise<SearchResult> {
       success: true,
       data: `Current weather: ${weatherText.trim()}${forecast ? `\nForecast: ${forecast.trim()}` : ''}`,
       source: 'wttr.in',
+      personalized: !prefs.incognitoMode && searchLocation !== location,
     };
   } catch (error) {
     console.error('[WebSearch] Weather fetch error:', error);
@@ -126,7 +201,6 @@ async function fetchTime(location: string): Promise<SearchResult> {
     const response = await fetch(url);
 
     if (!response.ok) {
-      // Try to get the list of timezones and find a match
       throw new Error(`Could not find timezone for "${location}"`);
     }
 
@@ -147,7 +221,7 @@ async function fetchTime(location: string): Promise<SearchResult> {
       data: `The current time in ${location} is ${formattedTime}`,
       source: 'worldtimeapi.org',
     };
-  } catch (error) {
+  } catch {
     // Fallback: just compute based on known UTC offset
     return {
       success: true,
@@ -200,12 +274,19 @@ function guessTimezone(location: string): string {
 }
 
 /**
- * Fetch news using DuckDuckGo or RSS feeds
+ * Fetch news using Google News RSS
+ * Personalizes based on user's language and country preferences
  */
-async function fetchNews(query: string): Promise<SearchResult> {
+async function fetchNews(query: string, prefs: SearchPreferences): Promise<SearchResult> {
   try {
-    // Use Google News RSS feed (free, no API key)
-    const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+    // Localize news based on user preferences
+    const hl = prefs.language || 'en';
+    const gl = prefs.countryCode || 'US';
+    const ceid = `${gl}:${hl}`;
+
+    const rssUrl = prefs.incognitoMode
+      ? `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`
+      : `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${hl}&gl=${gl}&ceid=${ceid}`;
 
     const response = await fetch(rssUrl, {
       headers: {
@@ -233,6 +314,7 @@ async function fetchNews(query: string): Promise<SearchResult> {
       success: true,
       data: `Recent news about "${query}":\n${headlines.map((h, i) => `${i + 1}. ${h}`).join('\n')}`,
       source: 'Google News',
+      personalized: !prefs.incognitoMode,
     };
   } catch (error) {
     console.error('[WebSearch] News fetch error:', error);
@@ -262,11 +344,101 @@ function extractRssHeadlines(xml: string, limit: number): string[] {
 }
 
 /**
- * General search using DuckDuckGo instant answers
+ * General search - uses Google PSE if configured, otherwise DuckDuckGo
+ * Google PSE provides better results and supports user personalization
  */
-async function fetchGeneral(query: string): Promise<SearchResult> {
+async function fetchGeneral(query: string, prefs: SearchPreferences): Promise<SearchResult> {
+  // Try Google Programmable Search Engine first if configured
+  const googleApiKey = process.env.GOOGLE_SEARCH_API_KEY;
+  const googleCseId = process.env.GOOGLE_SEARCH_ENGINE_ID;
+
+  if (googleApiKey && googleCseId && !prefs.incognitoMode) {
+    try {
+      const result = await fetchGooglePSE(query, prefs, googleApiKey, googleCseId);
+      if (result.success) {
+        return result;
+      }
+    } catch (error) {
+      console.warn('[WebSearch] Google PSE failed, falling back to DuckDuckGo:', error);
+    }
+  }
+
+  // Fallback to DuckDuckGo (free, no personalization)
+  return fetchDuckDuckGo(query);
+}
+
+/**
+ * Google Programmable Search Engine
+ * Provides personalized results based on user preferences
+ */
+async function fetchGooglePSE(
+  query: string,
+  prefs: SearchPreferences,
+  apiKey: string,
+  cseId: string
+): Promise<SearchResult> {
+  const params = new URLSearchParams({
+    key: apiKey,
+    cx: cseId,
+    q: query,
+    num: '5', // Number of results
+  });
+
+  // Add personalization parameters
+  if (prefs.language) {
+    params.set('lr', `lang_${prefs.language}`);
+    params.set('hl', prefs.language);
+  }
+  if (prefs.countryCode) {
+    params.set('gl', prefs.countryCode);
+  }
+  if (prefs.safeSearch) {
+    const safeMap: Record<string, string> = {
+      'off': 'off',
+      'medium': 'medium',
+      'high': 'active',
+    };
+    params.set('safe', safeMap[prefs.safeSearch] || 'medium');
+  }
+
+  const url = `https://www.googleapis.com/customsearch/v1?${params.toString()}`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('[WebSearch] Google PSE error:', errorText);
+    throw new Error(`Google Search API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (!data.items || data.items.length === 0) {
+    return {
+      success: false,
+      error: `No results found for "${query}"`,
+    };
+  }
+
+  // Format results
+  const results = data.items.slice(0, 3).map((item: { title: string; snippet: string; link: string }, i: number) => {
+    return `${i + 1}. **${item.title}**\n   ${item.snippet}`;
+  }).join('\n\n');
+
+  return {
+    success: true,
+    data: `Search results for "${query}":\n\n${results}`,
+    source: 'Google Search',
+    personalized: true,
+  };
+}
+
+/**
+ * DuckDuckGo Instant Answer API
+ * Free, no API key, but no personalization
+ */
+async function fetchDuckDuckGo(query: string): Promise<SearchResult> {
   try {
-    // DuckDuckGo Instant Answer API (free, no key needed)
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
 
     const response = await fetch(url, {
@@ -297,7 +469,6 @@ async function fetchGeneral(query: string): Promise<SearchResult> {
         result += ` (Source: ${data.DefinitionSource})`;
       }
     } else if (data.RelatedTopics && data.RelatedTopics.length > 0) {
-      // Get the first few related topics
       const topics = data.RelatedTopics
         .slice(0, 3)
         .filter((t: { Text?: string }) => t.Text)
@@ -318,9 +489,10 @@ async function fetchGeneral(query: string): Promise<SearchResult> {
       success: true,
       data: result,
       source: 'DuckDuckGo',
+      personalized: false,
     };
   } catch (error) {
-    console.error('[WebSearch] General search error:', error);
+    console.error('[WebSearch] DuckDuckGo search error:', error);
     return {
       success: false,
       error: `Search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
