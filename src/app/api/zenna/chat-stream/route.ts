@@ -439,69 +439,35 @@ NEVER invent names or facts. If you don't know something, ask.`,
 
     // Tool execution function for web searches and Notion operations
     // BUG 3 FIX: Store internet search results in memory for future recall
-    // ARCHITECTURE FIX: Call Google PSE directly instead of internal HTTP fetch
-    // (Internal HTTP fetches fail with 401 due to Vercel deployment protection)
+    // ADR-001: Use Zenna-MCP Gateway for all internet intelligence (Tavily-powered)
     const executeToolFn = async (toolName: string, input: Record<string, unknown>): Promise<string> => {
       if (toolName === 'web_search') {
         try {
           const searchQuery = input.query as string;
           const searchType = input.type as 'weather' | 'news' | 'time' | 'general';
 
-          // Enhance query based on type for better search results
-          let enhancedQuery = searchQuery;
-          if (searchType === 'weather') {
-            enhancedQuery = `current weather ${searchQuery}`;
-          } else if (searchType === 'time') {
-            enhancedQuery = `current time ${searchQuery}`;
-          } else if (searchType === 'news') {
-            enhancedQuery = `latest news ${searchQuery}`;
-          }
+          // Import MCP client dynamically to avoid cold-start overhead
+          const { mcpSearch } = await import('@/core/services/zenna-mcp-client');
 
-          // Call Google PSE directly (not via internal HTTP)
-          const googleApiKey = process.env.GOOGLE_SEARCH_API_KEY;
-          const googleCseId = process.env.GOOGLE_SEARCH_ENGINE_ID;
+          console.log('[Chat] Searching via Zenna-MCP Gateway:', searchQuery.substring(0, 50));
 
-          if (!googleApiKey || !googleCseId) {
-            console.error('[Chat] Google PSE not configured');
-            return 'Web search is not configured. Please set GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID.';
-          }
-
-          const params = new URLSearchParams({
-            key: googleApiKey,
-            cx: googleCseId,
-            q: enhancedQuery,
-            num: '8',
-            lr: 'lang_en',
-            gl: 'AU',
-            safe: 'medium',
+          const searchResult = await mcpSearch({
+            query: searchQuery,
+            searchType: searchType,
+            searchDepth: 'basic',
           });
 
-          console.log('[Chat] Calling Google PSE directly:', enhancedQuery.substring(0, 50));
-          const response = await fetch(`https://www.googleapis.com/customsearch/v1?${params.toString()}`);
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error('[Chat] Google PSE error:', response.status, errorText);
-            return `Search failed: ${response.status}`;
+          if (!searchResult.success) {
+            console.error('[Chat] MCP search failed:', searchResult.error);
+            return `Search failed: ${searchResult.error || 'Unknown error'}`;
           }
 
-          const data = await response.json();
-
-          if (!data.items || data.items.length === 0) {
-            return `No results found for "${searchQuery}"`;
-          }
-
-          // Format results with titles, snippets, and URLs
-          const results = data.items.slice(0, 5).map((item: { title: string; snippet: string; link: string }, i: number) => {
-            return `${i + 1}. **${item.title}**\n   ${item.snippet}\n   Source: ${item.link}`;
-          }).join('\n\n');
-
-          const resultText = `Search results for "${searchQuery}":\n\n${results}\n(Source: Google Search)`;
+          const resultText = searchResult.content;
 
           // BUG 3 FIX: Store internet search in memory for future recall
           try {
-            await memoryService.storeInternetSearch(userId, searchQuery, results, {
-              searchSource: 'Google Search',
+            await memoryService.storeInternetSearch(userId, searchQuery, resultText, {
+              searchSource: 'Tavily (via Zenna-MCP)',
               searchType: searchType,
               topic: searchType,
             });
