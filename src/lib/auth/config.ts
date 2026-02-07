@@ -175,7 +175,7 @@ export const authConfig: NextAuthConfig = {
         // Fetch full user data from database
         const { data: dbUser } = await supabase
           .from('users')
-          .select('id, email, role, onboarding_completed, settings')
+          .select('id, email, role, onboarding_completed, settings, user_type, god_mode')
           .eq('email', user.email)
           .single();
 
@@ -186,6 +186,8 @@ export const authConfig: NextAuthConfig = {
           token.isAdmin = dbUser.role === 'admin' || dbUser.email === ADMIN_EMAIL;
           token.isFather = dbUser.email === ADMIN_EMAIL;
           token.onboardingCompleted = dbUser.onboarding_completed;
+          token.userType = dbUser.user_type || 'human';
+          token.godMode = dbUser.god_mode || false;
 
           // Get subscription status
           const { data: subscription } = await supabase
@@ -208,7 +210,7 @@ export const authConfig: NextAuthConfig = {
         // This ensures role changes and subscription updates are reflected
         const { data: dbUser } = await supabase
           .from('users')
-          .select('id, email, role, onboarding_completed')
+          .select('id, email, role, onboarding_completed, user_type, god_mode')
           .eq('id', token.userId)
           .single();
 
@@ -217,6 +219,8 @@ export const authConfig: NextAuthConfig = {
           token.isAdmin = dbUser.role === 'admin' || dbUser.email === ADMIN_EMAIL;
           token.isFather = dbUser.email === ADMIN_EMAIL;
           token.onboardingCompleted = dbUser.onboarding_completed;
+          token.userType = dbUser.user_type || 'human';
+          token.godMode = dbUser.god_mode || false;
 
           // Refresh subscription status
           const { data: subscription } = await supabase
@@ -251,6 +255,8 @@ export const authConfig: NextAuthConfig = {
           status: string;
           expiresAt: string;
         } | undefined;
+        session.user.userType = (token.userType as string) || 'human';
+        session.user.godMode = (token.godMode as boolean) || false;
       }
       return session;
     },

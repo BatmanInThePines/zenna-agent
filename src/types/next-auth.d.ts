@@ -21,6 +21,9 @@ declare module 'next-auth' {
         status: string;
         expiresAt: string;
       };
+      // Workforce agent fields
+      userType: string;
+      godMode: boolean;
     };
   }
 
@@ -46,5 +49,8 @@ declare module 'next-auth/jwt' {
       status: string;
       expiresAt: string;
     };
+    // Workforce agent fields
+    userType: string;
+    godMode: boolean;
   }
 }

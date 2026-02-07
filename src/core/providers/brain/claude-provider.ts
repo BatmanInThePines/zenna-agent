@@ -43,6 +43,255 @@ IMPORTANT: You MUST use this tool for weather questions - do not guess or make u
       required: ['query', 'type'],
     },
   },
+  // Notion Integration Tools
+  {
+    name: 'notion_search',
+    description: `Search the user's connected Notion workspace for pages and databases. Use when the user asks to find, look up, or search for something in their Notion workspace.
+
+Examples: "Search my Notion for sprint planning", "Find my to-do list in Notion", "Look up my meeting notes"
+
+IMPORTANT: Only use this tool if the user has Notion connected (indicated in the system prompt).`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The search query to find pages or databases',
+        },
+        filter: {
+          type: 'string',
+          enum: ['page', 'database'],
+          description: 'Optional: filter results to only pages or only databases',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'notion_get_page',
+    description: `Retrieve and read the full content of a specific Notion page by its ID. Use after searching to get the details of a specific page the user wants to read.
+
+IMPORTANT: You need a page ID from a previous notion_search result. Do not guess page IDs.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        page_id: {
+          type: 'string',
+          description: 'The Notion page ID to retrieve (from a previous search result)',
+        },
+      },
+      required: ['page_id'],
+    },
+  },
+  {
+    name: 'notion_create_page',
+    description: `Create a new page in the user's Notion workspace. Use when the user wants to document something, capture notes, or create a new page in Notion.
+
+Examples: "Create meeting notes in Notion", "Document this conversation", "Add a page about our product idea"
+
+If no parent_id is provided, the page will be created at the workspace root level.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: {
+          type: 'string',
+          description: 'The title of the new page',
+        },
+        content: {
+          type: 'string',
+          description: 'The page content in markdown format (supports # headings, - bullets, 1. numbered lists, [ ] to-dos)',
+        },
+        parent_id: {
+          type: 'string',
+          description: 'Optional: parent page or database ID. If omitted, creates at workspace root.',
+        },
+        parent_type: {
+          type: 'string',
+          enum: ['page', 'database'],
+          description: 'Whether the parent is a page or database. Defaults to page.',
+        },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'notion_add_entry',
+    description: `Add a new entry (row) to an existing Notion database. Use when the user wants to add tasks, bugs, backlog items, or any entries to a database.
+
+Examples: "Add this bug to the sprint backlog", "Create a task in my project tracker", "Log a feature request"
+
+IMPORTANT: Use notion_search with filter "database" first to find the target database ID and understand its schema before adding entries.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        database_id: {
+          type: 'string',
+          description: 'The target Notion database ID (from a previous search result)',
+        },
+        title: {
+          type: 'string',
+          description: 'The title/name of the new entry',
+        },
+        properties: {
+          type: 'object' as const,
+          description: 'Key-value pairs for database properties (e.g., {"Status": "To Do", "Priority": "High"}). Property names must match the database schema.',
+          additionalProperties: { type: 'string' },
+        },
+      },
+      required: ['database_id', 'title'],
+    },
+  },
+  {
+    name: 'notion_delta_check',
+    description: `Check for recent changes in the user's Notion workspace since the last check-in. Returns modified pages, updated database entries, and who made each change.
+
+Use when: "What's new in Notion?", "Any updates since last time?", "What changed in my workspace?", "Check Notion for changes"
+
+Returns a summary of all modifications including who changed what and when. Automatically tracks the last check timestamp so subsequent calls only show new changes.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        database_id: {
+          type: 'string',
+          description: 'Optional: check a specific database only. If omitted, checks the entire workspace.',
+        },
+      },
+      required: [] as string[],
+    },
+  },
+];
+
+/**
+ * God-level ecosystem tools (conditionally included for admin/father users only).
+ * These tools bypass per-user memory isolation for cross-user feedback scanning.
+ */
+export const GOD_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'ecosystem_scan_feedback',
+    description: `Scan ALL Zenna ecosystem users' conversational memories for reported issues, bugs, and feature requests. This is a God-level administrative tool.
+
+Use when the admin says: "Check for user issues", "Scan for bug reports", "Find feature requests from users", "Comb through all user feedback", "What issues are users reporting?"
+
+This tool:
+1. Semantically searches ALL users' memories for feedback signals
+2. Uses AI classification to categorize each finding as: issue, bug, or feature_request
+3. Returns classified results with the originating user's name
+4. Does NOT automatically add items to Notion — present results conversationally first and wait for confirmation
+
+After presenting results, if the admin confirms, use notion_add_entry to add each item to the Zenna Backlog database.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        focus: {
+          type: 'string',
+          description: 'Optional: focus the scan on specific topics like "onboarding issues" or "mobile bugs". Leave empty for a general scan.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of memory snippets to scan (default: 30)',
+        },
+      },
+      required: [] as string[],
+    },
+  },
+];
+
+/**
+ * Workforce tools for OpenClaw BOT agents and authorized users.
+ * These tools enable sprint management and backlog operations via Notion.
+ */
+export const WORKFORCE_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'backlog_create',
+    description: `Create a structured backlog item in a Notion sprint/backlog database.
+Use after ecosystem_scan_feedback to log findings, or when creating issues/features/bugs.
+
+IMPORTANT: First use notion_search to find the target backlog database, then use this tool with the database_id.
+
+Use when: "Add this bug to the backlog", "Create a feature request", "Log this issue"`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        database_id: {
+          type: 'string',
+          description: 'Notion database ID for the backlog (find via notion_search first)',
+        },
+        title: {
+          type: 'string',
+          description: 'Issue/feature/task title',
+        },
+        type: {
+          type: 'string',
+          enum: ['bug', 'feature', 'improvement', 'task'],
+          description: 'Item type classification',
+        },
+        priority: {
+          type: 'string',
+          enum: ['critical', 'high', 'medium', 'low'],
+          description: 'Priority level',
+        },
+        description: {
+          type: 'string',
+          description: 'Detailed description of the item',
+        },
+        source: {
+          type: 'string',
+          description: 'Where this was discovered (e.g., "memory_mine scan", "user report", "QA testing")',
+        },
+      },
+      required: ['database_id', 'title', 'type'] as string[],
+    },
+  },
+  {
+    name: 'sprint_read',
+    description: `Read sprint tasks and assignments from a Notion database.
+Shows current tasks, their status, assignees, and priorities.
+
+Use when: "What are my sprint tasks?", "Show current assignments", "What's in the sprint?"`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        database_id: {
+          type: 'string',
+          description: 'Notion sprint database ID',
+        },
+        assignee: {
+          type: 'string',
+          description: 'Filter by assignee name (optional)',
+        },
+        status: {
+          type: 'string',
+          description: 'Filter by status (optional, e.g., "To Do", "In Progress", "Done")',
+        },
+      },
+      required: ['database_id'] as string[],
+    },
+  },
+  {
+    name: 'sprint_update',
+    description: `Update progress on a sprint task in Notion.
+Log status changes, add progress notes, or mark tasks complete.
+
+Use when: "Mark task X as done", "Update progress on task Y", "Move task to In Progress"`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        page_id: {
+          type: 'string',
+          description: 'The Notion page ID of the task to update',
+        },
+        status: {
+          type: 'string',
+          description: 'New status value (e.g., "In Progress", "Done", "Blocked")',
+        },
+        progress_note: {
+          type: 'string',
+          description: 'Progress note to append to the task page',
+        },
+      },
+      required: ['page_id'] as string[],
+    },
+  },
 ];
 
 export class ClaudeProvider implements BrainProvider {
@@ -324,11 +573,15 @@ export class ClaudeProvider implements BrainProvider {
   /**
    * Streaming response with tool use support
    * Yields text chunks and handles tool calls internally
+   *
+   * @param tools Optional tool array override. Defaults to ZENNA_TOOLS.
+   *              Pass [...ZENNA_TOOLS, ...GOD_TOOLS] for God-level users.
    */
   async *generateResponseStreamWithTools(
     messages: Message[],
     options?: Partial<BrainProviderConfig>,
-    executeToolFn?: (name: string, input: Record<string, unknown>) => Promise<string>
+    executeToolFn?: (name: string, input: Record<string, unknown>) => Promise<string>,
+    tools?: Anthropic.Tool[]
   ): AsyncGenerator<string, void, unknown> {
     if (!this.client) {
       throw new Error('Claude provider not initialized');
@@ -353,13 +606,14 @@ export class ClaudeProvider implements BrainProvider {
       console.log(`[ClaudeProvider] Stream+Tools iteration ${iterations}`);
 
       // First, make a non-streaming call to check for tool use
+      const activeTools = tools || ZENNA_TOOLS;
       const response = await this.client.messages.create({
         model,
         max_tokens: maxTokens,
         temperature,
         system: systemPrompt,
         messages: claudeMessages,
-        tools: ZENNA_TOOLS,
+        tools: activeTools,
       });
 
       if (response.stop_reason === 'tool_use') {

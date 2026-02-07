@@ -16,6 +16,8 @@ import type {
   UserSession,
   MasterConfig,
   AuthToken,
+  UserType,
+  MemoryScope,
 } from '../../interfaces/user-identity';
 
 interface IdentityConfig {
@@ -33,6 +35,13 @@ interface DatabaseUser {
   created_at: string;
   last_login_at?: string;
   settings: UserSettings;
+  // Workforce agent columns
+  user_type?: string;
+  autonomy_level?: number;
+  sprint_assignment_access?: boolean;
+  backlog_write_access?: boolean;
+  memory_scope?: string[];
+  god_mode?: boolean;
 }
 
 interface DatabaseSession {
@@ -383,6 +392,58 @@ export class SupabaseIdentityStore implements IdentityStore {
     return user?.role === 'admin' || user?.role === 'father';
   }
 
+  async createAgentUser(
+    email: string,
+    userType: 'worker_agent' | 'architect_agent',
+    config: {
+      description: string;
+      memoryScope: MemoryScope[];
+      autonomyLevel: number;
+      godMode?: boolean;
+      backlogWriteAccess?: boolean;
+      sprintAssignmentAccess?: boolean;
+    }
+  ): Promise<User> {
+    const username = email.split('@')[0];
+
+    // Check if already exists
+    const existing = await this.getUserByUsername(username);
+    if (existing) {
+      return existing;
+    }
+
+    const { data, error } = await this.client
+      .from('users')
+      .insert({
+        id: uuidv4(),
+        username,
+        email,
+        password_hash: '', // Headless agent — no password
+        role: 'user',      // Standard role — agent type tracked in user_type column
+        auth_provider: 'agent',
+        user_type: userType,
+        autonomy_level: config.autonomyLevel,
+        sprint_assignment_access: config.sprintAssignmentAccess ?? false,
+        backlog_write_access: config.backlogWriteAccess ?? false,
+        memory_scope: config.memoryScope,
+        god_mode: config.godMode ?? false,
+        settings: {
+          agentConfig: {
+            agentEmail: email,
+            agentDescription: config.description,
+          },
+        },
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to create agent user: ${error.message}`);
+    }
+
+    return this.mapUser(data);
+  }
+
   /**
    * Get conversation history for a user (persists across sessions)
    * Note: We query by user_id only to maintain memory across logins
@@ -540,6 +601,13 @@ export class SupabaseIdentityStore implements IdentityStore {
       createdAt: new Date(data.created_at),
       lastLoginAt: data.last_login_at ? new Date(data.last_login_at) : undefined,
       settings: data.settings || {},
+      // Workforce agent fields (defaults for backward compatibility)
+      userType: (data.user_type as UserType) || 'human',
+      autonomyLevel: data.autonomy_level ?? 0,
+      sprintAssignmentAccess: data.sprint_assignment_access ?? false,
+      backlogWriteAccess: data.backlog_write_access ?? false,
+      memoryScope: (data.memory_scope as MemoryScope[]) || ['companion'],
+      godMode: data.god_mode ?? false,
     };
   }
 

@@ -6,13 +6,22 @@
  * - Isolated memory space
  * - Personal settings
  *
- * Zero cross-user data access under any circumstance.
+ * Zero cross-user data access under any circumstance
+ * (except GOD mode for cross-user memory mining).
  *
  * Special role: "Father of Zenna" (Master/Admin)
  * - Exclusive access to Master Prompt
  * - Can define core behavior, guardrails, voice settings
  * - Can manage all users
+ *
+ * User Types:
+ * - human: Standard platform member
+ * - worker_agent: Autonomous sprint execution agent (OpenClaw BOT)
+ * - architect_agent: Supervisory AI agent with orchestration authority
  */
+
+export type UserType = 'human' | 'worker_agent' | 'architect_agent';
+export type MemoryScope = 'companion' | 'engineering' | 'platform' | 'simulation';
 
 export interface User {
   id: string;
@@ -21,6 +30,14 @@ export interface User {
   createdAt: Date;
   lastLoginAt?: Date;
   settings: UserSettings;
+
+  // Workforce agent fields (stored as DB columns)
+  userType: UserType;
+  autonomyLevel: number;               // 0 = manual, 5 = assisted, 10 = fully autonomous
+  sprintAssignmentAccess: boolean;
+  backlogWriteAccess: boolean;
+  memoryScope: MemoryScope[];          // Which scopes this user can read/write
+  godMode: boolean;                    // Cross-user memory mining (Father-grantable only)
 }
 
 export interface UserSettings {
@@ -70,6 +87,7 @@ export interface UserSettings {
       connectedAt?: number;
       ingestionStatus?: 'idle' | 'processing' | 'completed' | 'error';
       ingestionProgress?: number;
+      lastCheckedAt?: number; // Unix ms timestamp of last delta check
     };
     notebooklm?: { enabled: boolean };
   };
@@ -104,6 +122,15 @@ export interface UserSettings {
     // Whether to use user's location for local search results
     useLocationForSearch?: boolean;
   };
+
+  // Agent-specific metadata (only for worker_agent / architect_agent users)
+  agentConfig?: AgentConfig;
+}
+
+export interface AgentConfig {
+  agentEmail?: string;          // e.g., "ZennaArchitect@gmail.com"
+  agentDescription?: string;    // What this agent does
+  lastTaskAt?: string;          // ISO timestamp of last task execution
 }
 
 export interface UserSession {
@@ -258,6 +285,22 @@ export interface IdentityStore {
    * Check if user is Father
    */
   isFather(userId: string): Promise<boolean>;
+
+  /**
+   * Create a headless agent user (Father only)
+   */
+  createAgentUser(
+    email: string,
+    userType: 'worker_agent' | 'architect_agent',
+    config: {
+      description: string;
+      memoryScope: MemoryScope[];
+      autonomyLevel: number;
+      godMode?: boolean;
+      backlogWriteAccess?: boolean;
+      sprintAssignmentAccess?: boolean;
+    }
+  ): Promise<User>;
 }
 
 // ============================================

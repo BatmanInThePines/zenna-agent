@@ -101,6 +101,18 @@ export function canInitiateExports(role: string | null | undefined): boolean {
 }
 
 /**
+ * Check if user has God-level access (ecosystem-wide memory scanning)
+ * Only the father/primary admin can access cross-user memories.
+ * This is a privileged capability that bypasses per-user memory isolation.
+ */
+export function canAccessEcosystemMemories(
+  role: string | null | undefined,
+  email: string | null | undefined
+): boolean {
+  return isFather(email) || role === 'admin';
+}
+
+/**
  * Get CSAT color indicator
  */
 export function getCSATColor(score: number): 'red' | 'green' | 'gray' {
@@ -246,6 +258,81 @@ export async function updateUserRole(
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
+}
+
+// ============================================
+// WORKFORCE AGENT PERMISSIONS
+// ============================================
+
+/**
+ * Check if user has GOD-level access for cross-user memory mining.
+ * GOD mode enables ecosystem-wide intelligence mining across all memory scopes
+ * except companion (private emotional memories are always protected).
+ */
+export function hasGodMode(
+  godMode: boolean | undefined,
+  email: string | null | undefined
+): boolean {
+  if (isFather(email)) return true;
+  return godMode === true;
+}
+
+/**
+ * Check if user/agent can write to backlog databases.
+ */
+export function canWriteBacklog(
+  backlogWriteAccess: boolean | undefined,
+  email: string | null | undefined
+): boolean {
+  if (isFather(email)) return true;
+  return backlogWriteAccess === true;
+}
+
+/**
+ * Check if user/agent can read sprint assignments.
+ */
+export function canReadSprints(
+  sprintAssignmentAccess: boolean | undefined,
+  email: string | null | undefined
+): boolean {
+  if (isFather(email)) return true;
+  return sprintAssignmentAccess === true;
+}
+
+/**
+ * Check if user is a workforce agent (worker or architect).
+ */
+export function isAgentUser(
+  userType: string | undefined
+): boolean {
+  return userType === 'worker_agent' || userType === 'architect_agent';
+}
+
+/**
+ * Check if user has any workforce capabilities (sprint, backlog, or agent type).
+ */
+export function isWorkforceUser(
+  userType: string | undefined,
+  sprintAssignmentAccess: boolean | undefined,
+  backlogWriteAccess: boolean | undefined,
+  email: string | null | undefined
+): boolean {
+  if (isFather(email)) return true;
+  return isAgentUser(userType) || sprintAssignmentAccess === true || backlogWriteAccess === true;
+}
+
+/**
+ * Get the allowed memory scopes for a user.
+ * Human users default to ['companion'].
+ * Agents are restricted to their configured scopes.
+ */
+export function getAllowedMemoryScopes(
+  memoryScope: string[] | undefined
+): string[] {
+  if (!memoryScope || memoryScope.length === 0) {
+    return ['companion'];
+  }
+  return memoryScope;
 }
 
 /**

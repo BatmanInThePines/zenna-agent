@@ -26,14 +26,19 @@ export interface MemoryEntry {
   updatedAt: Date;
 }
 
+export type MemoryScopeType = 'companion' | 'engineering' | 'platform' | 'simulation';
+
 export interface MemoryMetadata {
-  type: 'conversation' | 'fact' | 'preference' | 'context' | 'internet_search' | 'smart_home';
+  type: 'conversation' | 'fact' | 'preference' | 'context' | 'internet_search' | 'smart_home' | 'notion_action';
   conversationId?: string;
   topic?: string;
   sentiment?: 'positive' | 'negative' | 'neutral';
   importance?: number; // 0-1 scale
   source?: 'user' | 'assistant' | 'system' | 'external';
   tags?: string[];
+
+  // Memory Scope Partitioning (OpenClaw BOT Workforce)
+  memoryScope?: MemoryScopeType;
 
   // Memory Classification Tags (BUG 3 - Internet Memory Persistence)
   contextSource?: MemoryContextSource;
@@ -46,6 +51,11 @@ export interface MemoryMetadata {
   // Smart Home Metadata
   deviceType?: string;         // e.g., "light", "thermostat", "lock"
   deviceCommand?: string;      // e.g., "turn_on", "set_temperature"
+
+  // Notion Integration Metadata
+  notionAction?: string;       // e.g., 'notion_search', 'notion_create_page', 'notion_add_entry'
+  notionPageId?: string;       // Page or database ID involved in the action
+  notionWorkspaceId?: string;  // Workspace reference for audit trail
 
   // Cross-Platform Context
   platformSource?: '360aware' | 'zenna_web' | 'zenna_mobile' | 'api';
@@ -62,7 +72,10 @@ export type MemoryContextSource =
   | '360aware'                // Cross-platform from 360aware.com.au
   | 'personal_fact'           // Extracted personal information
   | 'user_preference'         // User preferences and likes
-  | 'external_knowledge';     // NotebookLM, Notion, etc.
+  | 'external_knowledge'      // NotebookLM, Notion, etc.
+  | 'engineering_task'         // Sprint/backlog operations (OpenClaw BOT)
+  | 'agent_work_simulation'   // QA simulation conversations (OpenClaw BOT)
+  | 'platform_governance';    // Architecture decisions (OpenClaw BOT)
 
 export interface ConversationTurn {
   id: string;
@@ -107,6 +120,7 @@ export interface MemorySearchQuery {
     dateRange?: { start: Date; end: Date };
     conversationId?: string;
     tags?: string[];
+    memoryScope?: MemoryScopeType[];
   };
 }
 
