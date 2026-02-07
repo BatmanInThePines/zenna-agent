@@ -81,17 +81,28 @@ export async function POST(request: NextRequest) {
       : null;
 
     // Get user and master config
+    // For product integrations (360Aware), try to find by headless username first
+    const supabaseStore = identityStore as import('@/core/providers/identity/supabase-identity').SupabaseIdentityStore;
+    const headlessUsername = productContext?.productId
+      ? `${productContext.productId}_${userId.substring(0, 16)}`
+      : null;
+
     let [user, masterConfig] = await Promise.all([
-      identityStore.getUser(userId),
+      headlessUsername
+        ? supabaseStore.getUserByUsername(headlessUsername)
+        : identityStore.getUser(userId),
       identityStore.getMasterConfig(),
     ]);
+
+    // Fall back to direct ID lookup if username lookup failed
+    if (!user && !headlessUsername) {
+      user = await identityStore.getUser(userId);
+    }
 
     // Auto-create headless user for product integrations (e.g., 360Aware)
     if (!user && productContext?.productId) {
       console.log(`[Chat] Creating headless user for ${productContext.productId}: ${userId}`);
       try {
-        // Cast to access the createHeadlessUser method
-        const supabaseStore = identityStore as import('@/core/providers/identity/supabase-identity').SupabaseIdentityStore;
         user = await supabaseStore.createHeadlessUser(userId, productContext.productId);
         console.log(`[Chat] Headless user created: ${user.id}`);
       } catch (createError) {

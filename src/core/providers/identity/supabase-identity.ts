@@ -148,11 +148,11 @@ export class SupabaseIdentityStore implements IdentityStore {
     productId: string,
     settings: Partial<UserSettings> = {}
   ): Promise<User> {
-    // Use a deterministic ID based on product + external user ID
-    const userId = `${productId}_${externalUserId}`;
+    // Use deterministic username based on product + external user ID
+    const username = `${productId}_${externalUserId.substring(0, 16)}`;
 
-    // Check if already exists
-    const existing = await this.getUser(userId);
+    // Check if already exists by username
+    const existing = await this.getUserByUsername(username);
     if (existing) {
       return existing;
     }
@@ -160,9 +160,9 @@ export class SupabaseIdentityStore implements IdentityStore {
     const { data, error } = await this.client
       .from('users')
       .insert({
-        id: userId,
-        username: `${productId}_user_${externalUserId.substring(0, 8)}`,
-        password_hash: '', // No password for headless users
+        // Let Supabase generate UUID for id
+        username,
+        password_hash: 'HEADLESS_NO_PASSWORD', // Placeholder - headless users can't login directly
         role: 'user',
         settings: {
           personalPrompt: '',
