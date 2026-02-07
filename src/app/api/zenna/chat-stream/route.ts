@@ -439,47 +439,79 @@ NEVER invent names or facts. If you don't know something, ask.`,
 
     // Tool execution function for web searches and Notion operations
     // BUG 3 FIX: Store internet search results in memory for future recall
+    // ARCHITECTURE FIX: Call Google PSE directly instead of internal HTTP fetch
+    // (Internal HTTP fetches fail with 401 due to Vercel deployment protection)
     const executeToolFn = async (toolName: string, input: Record<string, unknown>): Promise<string> => {
       if (toolName === 'web_search') {
         try {
-          // Use NEXTAUTH_URL (production domain) for internal API calls
-          // VERCEL_URL points to preview deployments which have auth protection
-          const baseUrl = process.env.NEXTAUTH_URL ||
-            (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
-
           const searchQuery = input.query as string;
           const searchType = input.type as 'weather' | 'news' | 'time' | 'general';
 
-          const response = await fetch(`${baseUrl}/api/zenna/web-search`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              query: searchQuery,
-              type: searchType,
-            }),
+          // Enhance query based on type for better search results
+          let enhancedQuery = searchQuery;
+          if (searchType === 'weather') {
+            enhancedQuery = `current weather ${searchQuery}`;
+          } else if (searchType === 'time') {
+            enhancedQuery = `current time ${searchQuery}`;
+          } else if (searchType === 'news') {
+            enhancedQuery = `latest news ${searchQuery}`;
+          }
+
+          // Call Google PSE directly (not via internal HTTP)
+          const googleApiKey = process.env.GOOGLE_SEARCH_API_KEY;
+          const googleCseId = process.env.GOOGLE_SEARCH_ENGINE_ID;
+
+          if (!googleApiKey || !googleCseId) {
+            console.error('[Chat] Google PSE not configured');
+            return 'Web search is not configured. Please set GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID.';
+          }
+
+          const params = new URLSearchParams({
+            key: googleApiKey,
+            cx: googleCseId,
+            q: enhancedQuery,
+            num: '8',
+            lr: 'lang_en',
+            gl: 'AU',
+            safe: 'medium',
           });
 
-          const result = await response.json();
-          if (result.success) {
-            const resultText = `${result.data}\n(Source: ${result.source})`;
+          console.log('[Chat] Calling Google PSE directly:', enhancedQuery.substring(0, 50));
+          const response = await fetch(`https://www.googleapis.com/customsearch/v1?${params.toString()}`);
 
-            // BUG 3 FIX: Store internet search in memory for future recall
-            try {
-              await memoryService.storeInternetSearch(userId, searchQuery, result.data, {
-                searchSource: result.source || 'web',
-                searchType: searchType,
-                topic: searchType,
-              });
-              console.log(`[Chat] Stored internet search in memory: "${searchQuery}"`);
-            } catch (memError) {
-              console.error('[Chat] Failed to store internet search in memory:', memError);
-              // Don't fail the search just because memory storage failed
-            }
-
-            return resultText;
-          } else {
-            return result.error || 'Search failed';
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('[Chat] Google PSE error:', response.status, errorText);
+            return `Search failed: ${response.status}`;
           }
+
+          const data = await response.json();
+
+          if (!data.items || data.items.length === 0) {
+            return `No results found for "${searchQuery}"`;
+          }
+
+          // Format results with titles, snippets, and URLs
+          const results = data.items.slice(0, 5).map((item: { title: string; snippet: string; link: string }, i: number) => {
+            return `${i + 1}. **${item.title}**\n   ${item.snippet}\n   Source: ${item.link}`;
+          }).join('\n\n');
+
+          const resultText = `Search results for "${searchQuery}":\n\n${results}\n(Source: Google Search)`;
+
+          // BUG 3 FIX: Store internet search in memory for future recall
+          try {
+            await memoryService.storeInternetSearch(userId, searchQuery, results, {
+              searchSource: 'Google Search',
+              searchType: searchType,
+              topic: searchType,
+            });
+            console.log(`[Chat] Stored internet search in memory: "${searchQuery}"`);
+          } catch (memError) {
+            console.error('[Chat] Failed to store internet search in memory:', memError);
+            // Don't fail the search just because memory storage failed
+          }
+
+          return resultText;
         } catch (error) {
           console.error('[Chat] Web search error:', error);
           return `Failed to fetch real-time data: ${error instanceof Error ? error.message : 'Unknown error'}`;
