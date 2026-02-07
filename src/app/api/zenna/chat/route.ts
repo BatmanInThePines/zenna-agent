@@ -119,7 +119,8 @@ export async function POST(request: NextRequest) {
     // NOTE: Memory is shared across all apps (Zenna, 360Aware, etc.)
     // This ensures cross-app continuity - if a user talks to 360Aware,
     // those memories are available when they use Zenna and vice versa
-    const storedHistory = await memoryService.getConversationHistory(userId);
+    // IMPORTANT: Use user.id (from DB) not userId (from header) for consistency
+    const storedHistory = await memoryService.getConversationHistory(user.id);
 
     // Build message history for LLM
     // Use product-specific prompt if this is a product request (e.g., 360Aware)
@@ -133,7 +134,7 @@ export async function POST(request: NextRequest) {
     ];
 
     // Inject relevant memories from semantic search (ElevenLabs best practice: retrieveMemories at start of turn)
-    const memoryContext = await memoryService.buildMemoryContext(userId, message);
+    const memoryContext = await memoryService.buildMemoryContext(user.id, message);
     if (memoryContext) {
       // ElevenLabs pattern: Inject memory context as a separate system message
       // This ensures the LLM has access to relevant past information
@@ -178,7 +179,7 @@ No previous memories found related to this topic. If the user shares important i
     });
 
     // Save user message to permanent storage (Supabase + Pinecone if configured)
-    await memoryService.addConversationTurn(userId, 'user', message);
+    await memoryService.addConversationTurn(user.id, 'user', message);
 
     // Get brain provider - prefer Claude for better rate limits and quality
     // Order of preference: user setting > master config > Claude (if key exists) > Gemini
@@ -221,7 +222,7 @@ No previous memories found related to this topic. If the user shares important i
 
     const actionResult = await processActionBlocks(
       response.content,
-      userId,
+      user.id,
       user.settings,
       productContext // Pass product context for 360Aware actions
     );
@@ -241,7 +242,7 @@ No previous memories found related to this topic. If the user shares important i
     // NOTE: Memories are PERMANENT - we never delete them unless explicitly requested
     const isHueRelated = actionResult?.actionConfirmation !== undefined &&
       response.content.includes('control_lights');
-    await memoryService.addConversationTurn(userId, 'assistant', responseText,
+    await memoryService.addConversationTurn(user.id, 'assistant', responseText,
       isHueRelated ? { tags: ['Smart Home', 'Hue'], topic: 'smart-home-control' } : undefined
     );
 
