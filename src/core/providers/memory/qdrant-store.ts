@@ -137,6 +137,15 @@ export class QdrantLongTermStore implements LongTermMemoryStore {
         }
       );
 
+      await this.qdrantRequest(
+        `/collections/${this.config.collectionName}/index`,
+        'PUT',
+        {
+          field_name: 'memoryScope',
+          field_schema: 'keyword',
+        }
+      );
+
       console.log(`[QdrantStore] Created collection '${this.config.collectionName}' with ${vectorSize} dimensions`);
     }
 
@@ -170,6 +179,7 @@ export class QdrantLongTermStore implements LongTermMemoryStore {
         importance: entry.metadata.importance ?? 0.5,
         source: entry.metadata.source || null,
         tags: entry.metadata.tags || [],
+        memoryScope: entry.metadata.memoryScope || 'companion',
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
       },
@@ -264,6 +274,13 @@ export class QdrantLongTermStore implements LongTermMemoryStore {
       });
     }
 
+    if (query.filters?.memoryScope && query.filters.memoryScope.length > 0) {
+      must.push({
+        key: 'memoryScope',
+        match: { any: query.filters.memoryScope },
+      });
+    }
+
     const response = await this.qdrantRequest<{
       result: QdrantSearchResult[];
     }>(
@@ -277,6 +294,82 @@ export class QdrantLongTermStore implements LongTermMemoryStore {
         with_payload: true,
         with_vector: true,
       }
+    );
+
+    return response.result.map((match) => ({
+      entry: this.pointToMemoryEntry({
+        id: match.id,
+        payload: match.payload,
+        vector: match.vector,
+      }),
+      score: match.score,
+    }));
+  }
+
+  /**
+   * Search across ALL users' memories (God-level access only).
+   * SECURITY: Caller MUST verify God-level permissions before invoking.
+   * This bypasses the standard userId isolation for ecosystem-wide scanning.
+   */
+  async searchAllUsers(params: {
+    query: string;
+    topK?: number;
+    threshold?: number;
+    filters?: {
+      type?: MemoryMetadata['type'][];
+      tags?: string[];
+      memoryScope?: string[];
+    };
+  }): Promise<Array<{ entry: MemoryEntry; score: number }>> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    // Generate embedding for query
+    const queryEmbedding = await this.embeddingProvider.generateEmbedding(params.query);
+
+    // Build filter WITHOUT userId constraint (cross-user search)
+    const must: Array<Record<string, unknown>> = [];
+
+    if (params.filters?.type && params.filters.type.length > 0) {
+      must.push({
+        key: 'type',
+        match: { any: params.filters.type },
+      });
+    }
+
+    if (params.filters?.tags && params.filters.tags.length > 0) {
+      must.push({
+        key: 'tags',
+        match: { any: params.filters.tags },
+      });
+    }
+
+    if (params.filters?.memoryScope && params.filters.memoryScope.length > 0) {
+      must.push({
+        key: 'memoryScope',
+        match: { any: params.filters.memoryScope },
+      });
+    }
+
+    const body: Record<string, unknown> = {
+      vector: queryEmbedding,
+      limit: params.topK || 50,
+      score_threshold: params.threshold || 0.3,
+      with_payload: true,
+      with_vector: false, // Don't need embeddings back for read-only scan
+    };
+
+    if (must.length > 0) {
+      body.filter = { must };
+    }
+
+    const response = await this.qdrantRequest<{
+      result: QdrantSearchResult[];
+    }>(
+      `/collections/${this.config.collectionName}/points/search`,
+      'POST',
+      body
     );
 
     return response.result.map((match) => ({
@@ -326,6 +419,7 @@ export class QdrantLongTermStore implements LongTermMemoryStore {
         importance: updated.metadata.importance ?? 0.5,
         source: updated.metadata.source || null,
         tags: updated.metadata.tags || [],
+        memoryScope: updated.metadata.memoryScope || 'companion',
         createdAt: existing.createdAt.toISOString(),
         updatedAt: updated.updatedAt.toISOString(),
       },
@@ -512,6 +606,7 @@ export class QdrantLongTermStore implements LongTermMemoryStore {
         importance: payload.importance as number | undefined,
         source: payload.source as MemoryMetadata['source'],
         tags: payload.tags as string[] | undefined,
+        memoryScope: (payload.memoryScope as MemoryMetadata['memoryScope']) || 'companion',
       },
       createdAt: new Date(payload.createdAt as string),
       updatedAt: new Date(payload.updatedAt as string),

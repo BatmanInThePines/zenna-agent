@@ -442,9 +442,10 @@ NEVER invent names or facts. If you don't know something, ask.`,
     const executeToolFn = async (toolName: string, input: Record<string, unknown>): Promise<string> => {
       if (toolName === 'web_search') {
         try {
-          const baseUrl = process.env.VERCEL_URL
-            ? `https://${process.env.VERCEL_URL}`
-            : process.env.NEXTAUTH_URL || 'http://localhost:3000';
+          // Use NEXTAUTH_URL (production domain) for internal API calls
+          // VERCEL_URL points to preview deployments which have auth protection
+          const baseUrl = process.env.NEXTAUTH_URL ||
+            (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
           const searchQuery = input.query as string;
           const searchType = input.type as 'weather' | 'news' | 'time' | 'general';
