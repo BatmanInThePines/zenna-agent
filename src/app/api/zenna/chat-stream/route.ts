@@ -949,55 +949,71 @@ function buildHuePromptSection(userSettings: UserSettings): string {
   const hueConfig = userSettings.integrations?.hue;
   const manifest = hueConfig?.manifest;
 
-  let section = `\n## Philips Hue Integration (CONNECTED)\nYou can control the user's Philips Hue lights using their real home data below.\n\n`;
+  let section = `\n## Philips Hue Integration (CONNECTED)\nYou can control the user's Philips Hue lights. All device UIDs below are required for API commands.\n\n`;
 
   if (manifest) {
     // Multi-home support
     if (manifest.homes.length > 1) {
-      section += `**Homes:** ${manifest.homes.map((h: { name: string }) => h.name).join(', ')}\n\n`;
+      section += `**Homes:**\n`;
+      for (const home of manifest.homes) {
+        section += `- "${home.name}" [home ID: ${home.id}]\n`;
+      }
+      section += `\n`;
     } else if (manifest.homes.length === 1) {
-      section += `**Home:** ${manifest.homes[0].name}\n\n`;
+      section += `**Home:** "${manifest.homes[0].name}" [home ID: ${manifest.homes[0].id}]\n\n`;
     }
 
-    // Rooms with lights (group by home if multiple)
+    // Rooms with lights — every light shows its UID
     if (manifest.rooms.length > 0) {
       section += `**Rooms & Lights:**\n`;
       for (const room of manifest.rooms) {
-        const lightNames = (room.lights || []).map((l: { name: string }) => l.name).join(', ');
         const colorCapable = (room.lights || []).some((l: { supportsColor: boolean }) => l.supportsColor);
-        section += `- **${room.name}**: ${lightNames || 'no lights'}${colorCapable ? ' (color capable)' : ''}\n`;
-        if (room.groupedLightId) {
-          section += `  Room control ID: ${room.groupedLightId}\n`;
+        section += `- **${room.name}** [room ID: ${room.id}]${room.groupedLightId ? ` [grouped_light ID: ${room.groupedLightId}]` : ''}${colorCapable ? ' (color capable)' : ''}\n`;
+        for (const light of (room.lights || [])) {
+          const caps = [
+            light.supportsColor ? 'color' : null,
+            light.supportsDimming ? 'dim' : null,
+            light.supportsColorTemp ? 'ct' : null,
+          ].filter(Boolean).join(',');
+          section += `    - "${light.name}" [light ID: ${light.id}]${caps ? ` (${caps})` : ''}${light.productName ? ` — ${light.productName}` : ''}\n`;
         }
       }
       section += `\n`;
     }
 
-    // Zones
+    // Zones with grouped_light IDs
     if (manifest.zones.length > 0) {
       section += `**Zones:**\n`;
       for (const zone of manifest.zones) {
-        section += `- **${zone.name}**: ${(zone.lights || []).map((l: { name: string }) => l.name).join(', ')}\n`;
+        section += `- **${zone.name}** [zone ID: ${zone.id}]${zone.groupedLightId ? ` [grouped_light ID: ${zone.groupedLightId}]` : ''}\n`;
+        for (const light of (zone.lights || [])) {
+          section += `    - "${light.name}" [light ID: ${light.id}]\n`;
+        }
       }
       section += `\n`;
     }
 
-    // Scenes
+    // Scenes with IDs and room association
     if (manifest.scenes.length > 0) {
       section += `**Available Scenes:**\n`;
       for (const scene of manifest.scenes) {
-        section += `- "${scene.name}"${scene.roomName ? ` (${scene.roomName})` : ''} [ID: ${scene.id}]\n`;
+        section += `- "${scene.name}" [scene ID: ${scene.id}]${scene.roomName ? ` (${scene.roomName})` : ''}${scene.type ? ` [${scene.type}]` : ''}\n`;
       }
       section += `\n`;
     }
   }
 
   section += `
-**Available Actions - include a JSON action block in your response:**
+**Available Actions — include a JSON action block in your response:**
 
-To control lights immediately:
+To control a single light (use the light resource UID):
 \`\`\`json
-{"action": "control_lights", "target": "<light or room name>", "targetId": "<resource ID from manifest>", "targetType": "light|grouped_light", "state": "on|off", "brightness": 0-100, "color": {"xy": {"x": 0.0-1.0, "y": 0.0-1.0}}}
+{"action": "control_lights", "target": "<human name>", "targetId": "<light ID>", "targetType": "light", "state": "on|off", "brightness": 0-100, "color": {"xy": {"x": 0.0-1.0, "y": 0.0-1.0}}}
+\`\`\`
+
+To control an entire room or zone (use the grouped_light UID):
+\`\`\`json
+{"action": "control_lights", "target": "<room/zone name>", "targetId": "<grouped_light ID>", "targetType": "grouped_light", "state": "on|off", "brightness": 0-100, "color": {"xy": {"x": 0.0-1.0, "y": 0.0-1.0}}}
 \`\`\`
 
 Color reference (CIE xy):
@@ -1011,17 +1027,21 @@ Color reference (CIE xy):
 - Warm white: use color_temp mirek 350-500
 - Cool white: use color_temp mirek 153-250
 
-To activate a scene:
+To activate a scene (use the scene resource UID):
 \`\`\`json
-{"action": "control_lights", "sceneId": "<scene ID from manifest>", "sceneName": "<scene name>"}
+{"action": "control_lights", "sceneId": "<scene ID>", "sceneName": "<scene name>"}
 \`\`\`
 
 To create a scheduled routine (sunrise alarm, nightly off, etc.):
 \`\`\`json
-{"action": "create_schedule", "integration": "hue", "actionId": "turn-on|turn-off|activate-scene", "time": "HH:MM", "schedule_type": "once|daily|weekly", "daysOfWeek": [0-6], "parameters": {"target": "<name>", "brightness": 0-100, "color": "<color name>"}}
+{"action": "create_schedule", "integration": "hue", "actionId": "turn-on|turn-off|activate-scene", "time": "HH:MM", "schedule_type": "once|daily|weekly", "daysOfWeek": [0-6], "parameters": {"target": "<name>", "targetId": "<resource ID>", "brightness": 0-100, "color": "<color name>"}}
 \`\`\`
 
-**IMPORTANT:** Use the exact resource IDs from the manifest above. For room-level control, use the grouped_light ID with targetType "grouped_light". For individual lights, use light IDs with targetType "light".
+**CRITICAL:** Always use the exact resource UIDs from the manifest above — the Hue Bridge requires UIDs, not names.
+- For a single light: use the "light ID" with targetType "light"
+- For an entire room: use the "grouped_light ID" with targetType "grouped_light"
+- For a zone: use the "grouped_light ID" of the zone with targetType "grouped_light"
+- For a scene: use the "scene ID" in the sceneId field
 
 **DEMO MODE:** When demonstrating lights for the user, note the current state of lights from the manifest before changing them. After the demo, restore the previous state by sending another control_lights action block.
 `;
@@ -1092,8 +1112,9 @@ async function executeHueCommand(
   if (!resourceId && command.target) {
     const targetLower = command.target.toLowerCase();
 
-    // Try manifest first for room-level control
+    // Try manifest first: rooms, zones, then individual lights by name
     if (hueConfig.manifest) {
+      // Check rooms
       const room = hueConfig.manifest.rooms.find(
         (r: { name: string }) => r.name.toLowerCase().includes(targetLower)
       );
@@ -1101,9 +1122,34 @@ async function executeHueCommand(
         resourceId = room.groupedLightId;
         resourceType = 'grouped_light';
       }
+
+      // Check zones
+      if (!resourceId) {
+        const zone = hueConfig.manifest.zones.find(
+          (z: { name: string }) => z.name.toLowerCase().includes(targetLower)
+        );
+        if (zone?.groupedLightId) {
+          resourceId = zone.groupedLightId;
+          resourceType = 'grouped_light';
+        }
+      }
+
+      // Check individual lights in manifest by name
+      if (!resourceId) {
+        for (const r of hueConfig.manifest.rooms) {
+          const light = (r.lights || []).find(
+            (l: { name: string }) => l.name.toLowerCase().includes(targetLower)
+          );
+          if (light) {
+            resourceId = light.id;
+            resourceType = 'light';
+            break;
+          }
+        }
+      }
     }
 
-    // Fall back to searching lights by name via API
+    // Fall back to searching lights by name via API (manifest might be stale)
     if (!resourceId) {
       const lightsRes = await hueApiCall(`${BASE}/light`, {
         headers: {

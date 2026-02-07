@@ -284,31 +284,37 @@ export interface AuthResult {
 // ============================================
 
 export interface HueHome {
-  id: string;
+  id: string;        // bridge_home resource UID
   name: string;
 }
 
 export interface HueRoom {
-  id: string;
+  id: string;        // room resource UID
   homeId?: string;
   name: string;
   type: string;
   lights: HueLight[];
-  groupedLightId?: string;
+  groupedLightId?: string;  // grouped_light resource UID for room-level control
+  deviceIds?: string[];     // child device UIDs belonging to this room
 }
 
 export interface HueZone {
-  id: string;
+  id: string;        // zone resource UID
   name: string;
   lights: HueLight[];
+  groupedLightId?: string;  // grouped_light resource UID for zone-level control
 }
 
 export interface HueLight {
-  id: string;
-  name: string;
-  type: string;
+  id: string;        // light resource UID (used in PUT /resource/light/{id})
+  name: string;      // human-assigned name
+  deviceId?: string; // parent device UID (owner.rid)
+  type: string;      // archetype: e.g. sultan_bulb, spot_bulb, etc.
+  productName?: string;  // product data name (e.g. "Hue color lamp")
+  modelId?: string;      // product model ID
   supportsColor: boolean;
   supportsDimming: boolean;
+  supportsColorTemp: boolean;
   currentState?: {
     on: boolean;
     brightness?: number;
@@ -318,10 +324,22 @@ export interface HueLight {
 }
 
 export interface HueScene {
-  id: string;
-  name: string;
-  roomId?: string;
+  id: string;        // scene resource UID (used in PUT /resource/scene/{id})
+  name: string;      // human-assigned name
+  roomId?: string;   // owning room/zone UID
   roomName?: string;
+  type?: string;     // group type: room or zone
+  speed?: number;    // scene transition speed (0.0-1.0)
+}
+
+export interface HueDevice {
+  id: string;        // device resource UID
+  name: string;      // human-assigned name
+  productName?: string;  // product data name
+  modelId?: string;      // product model ID
+  manufacturer?: string;
+  archetype?: string;
+  lightIds?: string[];   // light resource UIDs owned by this device
 }
 
 export interface HueManifest {
@@ -329,5 +347,6 @@ export interface HueManifest {
   rooms: HueRoom[];
   zones: HueZone[];
   scenes: HueScene[];
+  devices: HueDevice[];  // all devices for cross-reference
   fetchedAt: number;
 }
