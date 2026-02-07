@@ -204,6 +204,7 @@ export class MemoryService {
       tags?: string[];
       topic?: string;
       platformSource?: '360aware' | 'zenna_web' | 'zenna_mobile' | 'api';
+      memoryScope?: 'companion' | 'engineering' | 'platform' | 'simulation';
     }
   ): Promise<void> {
     // Use userId as sessionId - the session_turns table expects UUID format
@@ -227,6 +228,7 @@ export class MemoryService {
             topic: metadata?.topic,
             contextSource: 'companion_conversation', // BUG 3 FIX: Tag for memory classification
             platformSource: metadata?.platformSource || 'zenna_web',
+            memoryScope: metadata?.memoryScope || 'companion',
           },
         });
       } catch (error) {
@@ -382,6 +384,56 @@ export class MemoryService {
   }
 
   /**
+   * Store a Notion interaction as a memory
+   * Tracks all Notion tool invocations with appropriate tagging
+   */
+  async storeNotionInteraction(
+    userId: string,
+    action: string,
+    input: Record<string, unknown>,
+    result: string,
+    memoryTag: string
+  ): Promise<MemoryEntry | null> {
+    if (!this.longTermStore) {
+      console.warn('[MemoryService] Vector store not configured - Notion interaction not persisted');
+      return null;
+    }
+
+    // Build a concise summary of the action
+    const inputSummary = action === 'notion_search'
+      ? `Query: "${input.query}"`
+      : action === 'notion_get_page'
+        ? `Page: ${input.page_id}`
+        : action === 'notion_create_page'
+          ? `Title: "${input.title}"`
+          : action === 'notion_add_entry'
+            ? `Entry: "${input.title}" in database ${input.database_id}`
+            : JSON.stringify(input);
+
+    const content = `${memoryTag} ${inputSummary} | Result: ${result.substring(0, 500)}`;
+
+    console.log(`[MemoryService] Storing Notion interaction: ${action} - ${inputSummary}`);
+
+    const isWriteAction = action.includes('create') || action.includes('add');
+
+    return this.longTermStore.store({
+      userId,
+      content,
+      metadata: {
+        type: 'notion_action',
+        source: 'external',
+        importance: isWriteAction ? 0.8 : 0.6,
+        tags: ['notion', action.replace('notion_', ''), memoryTag.replace(/[\[\]]/g, '')],
+        topic: 'notion-workspace',
+        contextSource: 'external_knowledge',
+        memoryScope: 'engineering',
+        notionAction: action,
+        notionPageId: (input.page_id || input.database_id || input.parent_id) as string | undefined,
+      },
+    });
+  }
+
+  /**
    * Search for relevant memories using semantic search
    * Returns memories sorted by relevance score
    */
@@ -392,6 +444,7 @@ export class MemoryService {
       topK?: number;
       threshold?: number;
       types?: MemoryMetadata['type'][];
+      memoryScopes?: ('companion' | 'engineering' | 'platform' | 'simulation')[];
     }
   ): Promise<RelevantMemory[]> {
     console.log(`[MemoryService] searchMemories called:`);
@@ -420,12 +473,16 @@ export class MemoryService {
     console.log(`[MemoryService] Searching Qdrant with topK=${options?.topK ?? 10}, threshold=${options?.threshold ?? 0.5}`);
 
     try {
+      const filters: { type?: MemoryMetadata['type'][]; memoryScope?: ('companion' | 'engineering' | 'platform' | 'simulation')[] } = {};
+      if (options?.types) filters.type = options.types;
+      if (options?.memoryScopes) filters.memoryScope = options.memoryScopes;
+
       const results = await this.longTermStore.search({
         query,
         userId,
         topK: options?.topK ?? 10,
         threshold: options?.threshold ?? 0.5,
-        filters: options?.types ? { type: options.types } : undefined,
+        filters: Object.keys(filters).length > 0 ? filters : undefined,
       });
 
       console.log(`[MemoryService] Qdrant returned ${results.length} results`);
@@ -444,18 +501,150 @@ export class MemoryService {
   }
 
   /**
+   * Scan ALL users' memories for feedback (issues, bugs, feature requests).
+   * SECURITY: Only callable by God-level users. Caller MUST verify permissions.
+   *
+   * Performs multiple semantic searches with different query strategies
+   * to maximize recall of user-reported problems.
+   */
+  async scanEcosystemFeedback(options?: {
+    topK?: number;
+    threshold?: number;
+  }): Promise<Array<{
+    content: string;
+    userId: string;
+    type: string;
+    createdAt: Date;
+    score: number;
+    tags?: string[];
+  }>> {
+    if (!this.longTermStore) {
+      console.warn('[MemoryService] No vector store — ecosystem scan unavailable');
+      return [];
+    }
+
+    // Check if the long-term store supports cross-user search
+    const store = this.longTermStore as { searchAllUsers?: (...args: unknown[]) => unknown };
+    if (typeof store.searchAllUsers !== 'function') {
+      console.error('[MemoryService] Vector store does not support cross-user search');
+      return [];
+    }
+
+    // Cast to QdrantLongTermStore type for searchAllUsers
+    const qdrantStore = this.longTermStore as import('../providers/memory/qdrant-store').QdrantLongTermStore;
+
+    // Run multiple semantic searches to capture different phrasings
+    const searchQueries = [
+      'bug report problem issue error not working broken',
+      'feature request would be nice wish could want need',
+      'suggestion improvement idea enhancement',
+      'frustrating annoying confusing difficult hard to use',
+      'complaint issue problem with the system',
+    ];
+
+    const allResults = new Map<string, {
+      content: string;
+      userId: string;
+      type: string;
+      createdAt: Date;
+      score: number;
+      tags?: string[];
+    }>();
+
+    for (const query of searchQueries) {
+      try {
+        const results = await qdrantStore.searchAllUsers({
+          query,
+          topK: options?.topK ?? 30,
+          threshold: options?.threshold ?? 0.4,
+          filters: {
+            type: ['conversation'], // Focus on conversation memories
+            // Privacy: exclude companion scope to protect personal memories
+            memoryScope: ['engineering', 'platform', 'simulation'],
+          },
+        });
+
+        for (const r of results) {
+          // Deduplicate by memory ID — keep highest score
+          const existing = allResults.get(r.entry.id);
+          if (!existing || r.score > existing.score) {
+            allResults.set(r.entry.id, {
+              content: r.entry.content,
+              userId: r.entry.userId,
+              type: r.entry.metadata.type,
+              createdAt: r.entry.createdAt,
+              score: r.score,
+              tags: r.entry.metadata.tags,
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`[MemoryService] Ecosystem scan query failed: "${query}"`, error);
+        // Continue with remaining queries
+      }
+    }
+
+    console.log(`[MemoryService] Ecosystem scan found ${allResults.size} unique memories`);
+
+    // Sort by score descending
+    return Array.from(allResults.values()).sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Resolve a list of userIds to usernames for display.
+   * Results are cached within the call to avoid redundant lookups.
+   */
+  async resolveUsernames(userIds: string[]): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    const uniqueIds = [...new Set(userIds)];
+
+    for (const id of uniqueIds) {
+      try {
+        const user = await this.identityStore.getUser(id);
+        map.set(id, user?.username || id);
+      } catch {
+        map.set(id, id);
+      }
+    }
+
+    return map;
+  }
+
+  /**
    * Build context from relevant memories for LLM prompt injection
    */
   async buildMemoryContext(userId: string, currentMessage: string): Promise<string | null> {
     console.log(`[MemoryService] Building memory context for: "${currentMessage.substring(0, 50)}..."`);
     console.log(`[MemoryService] Vector provider: ${this.vectorProvider}, hasLongTermStore: ${!!this.longTermStore}`);
 
-    const relevantMemories = await this.searchMemories(userId, currentMessage, {
-      topK: 20,
-      threshold: 0.3, // Lowered significantly to catch more relevant memories
+    // First, search for facts specifically (these are high-value personal memories)
+    const factResults = await this.searchMemories(userId, currentMessage, {
+      topK: 10,
+      threshold: 0.1, // Very low threshold for facts - we want to find them
+      types: ['fact', 'preference'],
     });
 
-    console.log(`[MemoryService] Found ${relevantMemories.length} relevant memories`);
+    console.log(`[MemoryService] Found ${factResults.length} facts/preferences`);
+
+    // Then search for relevant conversations
+    const conversationResults = await this.searchMemories(userId, currentMessage, {
+      topK: 20,
+      threshold: 0.2, // Slightly higher for conversations
+      types: ['conversation'],
+    });
+
+    console.log(`[MemoryService] Found ${conversationResults.length} conversation memories`);
+
+    // Combine and deduplicate
+    const seenContent = new Set<string>();
+    const relevantMemories = [...factResults, ...conversationResults].filter(m => {
+      const contentKey = m.content.substring(0, 100);
+      if (seenContent.has(contentKey)) return false;
+      seenContent.add(contentKey);
+      return true;
+    });
+
+    console.log(`[MemoryService] Total unique memories: ${relevantMemories.length}`);
 
     if (relevantMemories.length === 0) {
       return null;

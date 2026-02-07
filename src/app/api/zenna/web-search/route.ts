@@ -352,15 +352,28 @@ async function fetchGeneral(query: string, prefs: SearchPreferences): Promise<Se
   const googleApiKey = process.env.GOOGLE_SEARCH_API_KEY;
   const googleCseId = process.env.GOOGLE_SEARCH_ENGINE_ID;
 
-  if (googleApiKey && googleCseId && !prefs.incognitoMode) {
+  console.log('[WebSearch] fetchGeneral called:', {
+    hasGoogleApiKey: !!googleApiKey,
+    hasGoogleCseId: !!googleCseId,
+    incognitoMode: prefs.incognitoMode,
+    query: query.substring(0, 50),
+  });
+
+  // Use Google PSE if API keys are configured
+  // Even in incognito mode, we can use it without personalization
+  if (googleApiKey && googleCseId) {
     try {
       const result = await fetchGooglePSE(query, prefs, googleApiKey, googleCseId);
       if (result.success) {
+        console.log('[WebSearch] Google PSE success');
         return result;
       }
+      console.warn('[WebSearch] Google PSE returned no results, trying DuckDuckGo');
     } catch (error) {
       console.warn('[WebSearch] Google PSE failed, falling back to DuckDuckGo:', error);
     }
+  } else {
+    console.log('[WebSearch] Google PSE not configured, using DuckDuckGo');
   }
 
   // Fallback to DuckDuckGo (free, no personalization)

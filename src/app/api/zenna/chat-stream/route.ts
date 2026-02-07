@@ -5,39 +5,73 @@ import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identi
 import { brainProviderFactory } from '@/core/providers/brain';
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
+import { canAccessEcosystemMemories, isWorkforceUser, canWriteBacklog, canReadSprints, isAgentUser } from '@/lib/utils/permissions';
+import { ZENNA_TOOLS, GOD_TOOLS, WORKFORCE_TOOLS } from '@/core/providers/brain/claude-provider';
 
 /**
  * Extract important facts from user messages
  * Detects statements about family, preferences, personal info, etc.
+ *
+ * CRITICAL: This function must reliably extract personal facts like family member names
+ * so they persist in long-term memory and can be recalled later.
  */
 function extractFactsFromMessage(message: string): Array<{fact: string; topic: string; tags: string[]}> {
   const facts: Array<{fact: string; topic: string; tags: string[]}> = [];
   const lowerMessage = message.toLowerCase();
 
-  // Family member patterns - "my X is/are/was named Y" or "my X's name is Y"
-  const familyPatterns = [
-    // Direct name statements
-    /my\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner|grandfather|grandmother|grandpa|grandma|uncle|aunt|cousin)(?:'s)?\s+(?:name\s+)?(?:is|was|are)\s+([A-Z][a-zA-Z\s]+?)(?:\.|,|$|\s+and|\s+but|\s+who|\s+he|\s+she)/gi,
-    // "I have a X named Y"
-    /i\s+have\s+a\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner)(?:\s+(?:who\s+is\s+)?named|\s+called)\s+([A-Z][a-zA-Z\s]+?)(?:\.|,|$)/gi,
-    // "X is my Y" pattern
-    /([A-Z][a-zA-Z\s]+?)\s+is\s+my\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner|grandfather|grandmother)/gi,
-  ];
+  console.log(`[FactExtraction] Processing message: "${message.substring(0, 100)}..."`);
+
+  // Family member patterns - multiple approaches to catch different phrasings
+  // Pattern 1: "my X's name is Y" or "my X name is Y"
+  const familyPattern1 = /my\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner|grandfather|grandmother|grandpa|grandma|uncle|aunt|cousin)(?:'s)?\s+name\s+is\s+([A-Z][a-zA-Z]+)/gi;
+
+  // Pattern 2: "my X is named Y" or "my X is Y" (when followed by a name)
+  const familyPattern2 = /my\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner|grandfather|grandmother|grandpa|grandma)(?:\s+is\s+named|\s+is\s+called|\s+is)\s+([A-Z][a-zA-Z]+)/gi;
+
+  // Pattern 3: "X is my Y"
+  const familyPattern3 = /([A-Z][a-zA-Z]+)\s+is\s+my\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner|grandfather|grandmother|grandpa|grandma)/gi;
+
+  // Pattern 4: "I have a X named Y"
+  const familyPattern4 = /i\s+have\s+a\s+(father|dad|mother|mom|brother|sister|son|daughter|wife|husband|spouse|partner)(?:\s+named|\s+called)\s+([A-Z][a-zA-Z]+)/gi;
+
+  const familyPatterns = [familyPattern1, familyPattern2, familyPattern3, familyPattern4];
 
   for (const pattern of familyPatterns) {
+    // Reset lastIndex for each pattern
+    pattern.lastIndex = 0;
     let match;
     while ((match = pattern.exec(message)) !== null) {
-      const relation = match[1].toLowerCase();
-      const name = match[2]?.trim() || match[1]?.trim();
-      if (name && name.length > 1 && name.length < 50) {
+      let relation: string;
+      let name: string;
+
+      // Pattern 3 has reversed capture groups (name first, then relation)
+      if (pattern === familyPattern3) {
+        name = match[1]?.trim();
+        relation = match[2]?.toLowerCase();
+      } else {
+        relation = match[1]?.toLowerCase();
+        name = match[2]?.trim();
+      }
+
+      if (name && name.length > 1 && name.length < 30 && relation) {
         // Normalize relation names
-        const normalizedRelation = relation.replace('dad', 'father').replace('mom', 'mother')
-          .replace('grandpa', 'grandfather').replace('grandma', 'grandmother');
-        facts.push({
-          fact: `User's ${normalizedRelation}'s name is ${name}`,
-          topic: 'family',
-          tags: ['family', normalizedRelation, 'personal']
-        });
+        const normalizedRelation = relation
+          .replace('dad', 'father')
+          .replace('mom', 'mother')
+          .replace('grandpa', 'grandfather')
+          .replace('grandma', 'grandmother');
+
+        const factText = `User's ${normalizedRelation}'s name is ${name}`;
+
+        // Avoid duplicates
+        if (!facts.some(f => f.fact === factText)) {
+          console.log(`[FactExtraction] Found family fact: ${factText}`);
+          facts.push({
+            fact: factText,
+            topic: 'family',
+            tags: ['family', normalizedRelation, 'personal', 'name']
+          });
+        }
       }
     }
   }
@@ -248,11 +282,26 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Check if user has God-level (ecosystem admin) access
+    const isGodUser = canAccessEcosystemMemories(user.role, session.user.email);
+
+    // Check if user has workforce capabilities (sprint/backlog access or agent type)
+    const hasWorkforceAccess = isWorkforceUser(
+      user.userType,
+      user.sprintAssignmentAccess,
+      user.backlogWriteAccess,
+      session.user.email
+    );
+
+    // Determine default memory scope for this user
+    const isAgent = isAgentUser(user.userType);
+    const defaultMemoryScope = isAgent ? 'engineering' : 'companion';
+
     // Get conversation history (permanent, never deleted)
     const storedHistory = await memoryService.getConversationHistory(userId);
 
     // Build message history for LLM
-    const systemPrompt = buildSystemPrompt(masterConfig, user.settings);
+    const systemPrompt = buildSystemPrompt(masterConfig, user.settings, user.role, session.user.email, user);
     const history: Message[] = [
       { role: 'system', content: systemPrompt },
     ];
@@ -328,7 +377,15 @@ NEVER invent names or facts. If you don't know something, ask.`,
     // NOTE: Memories are PERMANENT - we never delete them
     // Don't save system messages like background noise detection
     if (!isBackgroundNoiseMessage) {
-      await memoryService.addConversationTurn(userId, 'user', message);
+      // Determine memory scope: agents use 'engineering' or 'simulation' scope
+      const msgScope = isAgent && message.includes('[AgentWorkSimulation]')
+        ? 'simulation' as const
+        : defaultMemoryScope as 'companion' | 'engineering' | 'platform' | 'simulation';
+
+      await memoryService.addConversationTurn(userId, 'user', message, {
+        memoryScope: msgScope,
+        tags: isAgent ? ['agent_interaction'] : undefined,
+      });
 
       // Extract and store important facts from user message
       // This ensures facts like "My father's name is X" are stored as high-importance memories
@@ -380,9 +437,9 @@ NEVER invent names or facts. If you don't know something, ask.`,
       apiKey: brainApiKey,
     });
 
-    // Tool execution function for web searches
+    // Tool execution function for web searches and Notion operations
     // BUG 3 FIX: Store internet search results in memory for future recall
-    const executeWebSearchTool = async (toolName: string, input: Record<string, unknown>): Promise<string> => {
+    const executeToolFn = async (toolName: string, input: Record<string, unknown>): Promise<string> => {
       if (toolName === 'web_search') {
         try {
           const baseUrl = process.env.VERCEL_URL
@@ -427,8 +484,474 @@ NEVER invent names or facts. If you don't know something, ask.`,
           return `Failed to fetch real-time data: ${error instanceof Error ? error.message : 'Unknown error'}`;
         }
       }
+
+      // Notion integration tools
+      if (toolName.startsWith('notion_')) {
+        const notionToken = user?.settings.externalContext?.notion?.token;
+        if (!notionToken) {
+          return 'Notion is not connected. The user needs to connect Notion in Settings > Integrations first.';
+        }
+
+        try {
+          const { NotionService } = await import('@/core/services/notion-service');
+          const notion = new NotionService(notionToken);
+          let result: string;
+          let memoryTag: string;
+
+          switch (toolName) {
+            case 'notion_search': {
+              const searchResults = await notion.search(
+                input.query as string,
+                input.filter as 'page' | 'database' | undefined
+              );
+
+              if (searchResults.length === 0) {
+                result = `No results found for "${input.query}" in the Notion workspace.`;
+              } else {
+                const formatted = searchResults.map((r, i) =>
+                  `${i + 1}. [${r.type}] "${r.title}" (ID: ${r.id}) — ${r.url}`
+                ).join('\n');
+                result = `Found ${searchResults.length} result(s):\n${formatted}`;
+              }
+              memoryTag = '[NotionRetrieval]';
+              break;
+            }
+
+            case 'notion_get_page': {
+              const page = await notion.getPageContent(input.page_id as string);
+              result = `Page: "${page.title}"\nURL: ${page.url}\nLast edited: ${page.lastEditedTime}\n\nContent:\n${page.content}`;
+              memoryTag = '[NotionRetrieval]';
+              break;
+            }
+
+            case 'notion_create_page': {
+              const created = await notion.createPage({
+                title: input.title as string,
+                content: input.content as string | undefined,
+                parentId: input.parent_id as string | undefined,
+                parentType: (input.parent_type as 'page' | 'database') || 'page',
+              });
+              result = `Page created successfully!\nTitle: "${input.title}"\nURL: ${created.url}`;
+              memoryTag = '[NotionWrite]';
+              break;
+            }
+
+            case 'notion_add_entry': {
+              // First get the database schema so we can report it
+              let schemaInfo = '';
+              try {
+                const schema = await notion.getDatabaseSchema(input.database_id as string);
+                schemaInfo = `\nDatabase: "${schema.title}"\nAvailable properties: ${schema.properties.map(p => `${p.name} (${p.type})`).join(', ')}`;
+              } catch {
+                // Schema fetch is informational, don't fail the whole operation
+              }
+
+              const entry = await notion.addDatabaseEntry({
+                databaseId: input.database_id as string,
+                title: input.title as string,
+                properties: input.properties as Record<string, string> | undefined,
+              });
+              result = `Entry added successfully!${schemaInfo}\nTitle: "${input.title}"\nURL: ${entry.url}`;
+              memoryTag = '[NotionBacklogAction]';
+              break;
+            }
+
+            case 'notion_delta_check': {
+              // Get lastCheckedAt from user settings
+              const lastCheckedAt = user?.settings.externalContext?.notion?.lastCheckedAt;
+              const sinceTimestamp = lastCheckedAt
+                ? new Date(lastCheckedAt).toISOString()
+                : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(); // Default: 7 days ago
+
+              const scopedDbId = input.database_id as string | undefined;
+              const changes = await notion.getChangesSince(sinceTimestamp, scopedDbId);
+
+              if (changes.totalChanges === 0) {
+                const sinceLabel = lastCheckedAt
+                  ? new Date(lastCheckedAt).toLocaleString()
+                  : '7 days ago (first check)';
+                result = `No changes found in Notion since ${sinceLabel}.`;
+              } else {
+                const sinceLabel = lastCheckedAt
+                  ? new Date(lastCheckedAt).toLocaleString()
+                  : '7 days ago (first check)';
+                let formatted = `Changes since ${sinceLabel} (${changes.totalChanges} total):\n\n`;
+
+                // Modified standalone pages
+                if (changes.modifiedPages.length > 0) {
+                  formatted += `**Modified Pages:**\n`;
+                  for (const page of changes.modifiedPages) {
+                    formatted += `- "${page.title}" edited${page.lastEditedBy ? ` by ${page.lastEditedBy}` : ''} at ${page.lastEditedTime}\n  URL: ${page.url}\n`;
+                  }
+                  formatted += '\n';
+                }
+
+                // Modified database entries — group by database
+                if (changes.modifiedEntries.length > 0) {
+                  const byDb = new Map<string, typeof changes.modifiedEntries>();
+                  for (const entry of changes.modifiedEntries) {
+                    const key = entry.databaseTitle;
+                    if (!byDb.has(key)) byDb.set(key, []);
+                    byDb.get(key)!.push(entry);
+                  }
+
+                  for (const [dbName, entries] of byDb) {
+                    formatted += `**${dbName}:**\n`;
+                    for (const entry of entries) {
+                      const propsStr = Object.entries(entry.properties)
+                        .filter(([key]) => key !== 'Name' && key !== 'Title') // Skip title since we show it
+                        .map(([k, v]) => `${k}: ${v}`)
+                        .join(', ');
+                      formatted += `- "${entry.title}"${entry.lastEditedBy ? ` (by ${entry.lastEditedBy})` : ''} — ${propsStr || 'updated'}\n  URL: ${entry.url}\n`;
+                    }
+                    formatted += '\n';
+                  }
+                }
+
+                result = formatted;
+              }
+
+              // Update lastCheckedAt in user settings so next call only shows new changes
+              try {
+                const identityStore = memoryService.getIdentityStore();
+                await identityStore.updateSettings(userId, {
+                  externalContext: {
+                    ...user?.settings.externalContext,
+                    notion: {
+                      ...user?.settings.externalContext?.notion,
+                      enabled: user?.settings.externalContext?.notion?.enabled ?? true,
+                      lastCheckedAt: Date.now(),
+                    },
+                  },
+                });
+                console.log('[Chat] Updated Notion lastCheckedAt timestamp');
+              } catch (settingsError) {
+                console.error('[Chat] Failed to update Notion lastCheckedAt:', settingsError);
+              }
+
+              memoryTag = '[NotionRetrieval]';
+              break;
+            }
+
+            default:
+              return `Unknown Notion tool: ${toolName}`;
+          }
+
+          // Store Notion interaction in memory for future recall
+          try {
+            await memoryService.storeNotionInteraction(userId, toolName, input, result, memoryTag);
+            console.log(`[Chat] Stored Notion interaction in memory: ${toolName}`);
+          } catch (memError) {
+            console.error('[Chat] Failed to store Notion interaction in memory:', memError);
+          }
+
+          return result;
+        } catch (error) {
+          console.error(`[Chat] Notion tool error (${toolName}):`, error);
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+          // Provide clean error messages for known Notion error types
+          if (errorMsg.startsWith('NOTION_')) {
+            return errorMsg.replace(/^NOTION_\w+:\s*/, '');
+          }
+          return `Failed to execute Notion operation: ${errorMsg}`;
+        }
+      }
+
+      // ===== GOD-LEVEL: ECOSYSTEM FEEDBACK SCANNER =====
+      if (toolName === 'ecosystem_scan_feedback') {
+        // Double-check God-level access (belt + suspenders)
+        if (!isGodUser) {
+          return 'Access denied. This tool requires God-level administrative privileges.';
+        }
+
+        try {
+          const focus = input.focus as string | undefined;
+          const limit = (input.limit as number) || 30;
+
+          // Step 1: Scan all users' memories for feedback signals
+          const rawResults = await memoryService.scanEcosystemFeedback({
+            topK: limit,
+            threshold: 0.35,
+          });
+
+          if (rawResults.length === 0) {
+            return 'No feedback, issues, or feature requests found across ecosystem users.';
+          }
+
+          // Step 2: Resolve userIds to usernames for attribution
+          const usernameMap = await memoryService.resolveUsernames(
+            rawResults.map(r => r.userId)
+          );
+
+          // Step 3: Build snippets for AI classification
+          const snippets = rawResults.slice(0, 50).map((r, i) => ({
+            index: i + 1,
+            user: usernameMap.get(r.userId) || 'Unknown',
+            content: r.content.substring(0, 300),
+            date: r.createdAt.toISOString().split('T')[0],
+          }));
+
+          // Step 4: Classify via secondary Claude call
+          const AnthropicSDK = (await import('@anthropic-ai/sdk')).default;
+          const classifier = new AnthropicSDK({ apiKey: process.env.ANTHROPIC_API_KEY! });
+
+          const classificationResponse = await classifier.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 4096,
+            temperature: 0.1,
+            system: `You are a product feedback classifier. Analyze user conversation snippets and classify each as one of: bug, issue, feature_request, or irrelevant.
+
+Rules:
+- "bug" = something is broken, crashes, errors, doesn't work as expected
+- "issue" = a problem, complaint, or pain point with existing functionality
+- "feature_request" = a wish, suggestion, or request for new functionality
+- "irrelevant" = not feedback (general conversation, greetings, questions, etc.)
+
+Return ONLY a valid JSON array. No explanation text.`,
+            messages: [{
+              role: 'user',
+              content: `Classify each memory snippet. Return a JSON array of objects with fields: index, classification (bug|issue|feature_request|irrelevant), title (short 5-10 word summary for a backlog), user, date, priority (high|medium|low).
+
+${focus ? `Focus area: ${focus}` : 'Scan for all types of feedback.'}
+
+Snippets:
+${JSON.stringify(snippets, null, 2)}`
+            }],
+          });
+
+          // Step 5: Parse classification results
+          const classText = classificationResponse.content
+            .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+            .map(b => b.text)
+            .join('');
+
+          const jsonMatch = classText.match(/\[[\s\S]*\]/);
+          if (!jsonMatch) {
+            return `Found ${rawResults.length} memory snippets but AI classification returned unexpected format. Raw snippet count available for manual review.`;
+          }
+
+          const classified = JSON.parse(jsonMatch[0]) as Array<{
+            index: number;
+            classification: string;
+            title: string;
+            user: string;
+            date: string;
+            priority: string;
+          }>;
+
+          const actionable = classified.filter(c => c.classification !== 'irrelevant');
+
+          if (actionable.length === 0) {
+            return `Scanned ${rawResults.length} memories across all users. No actionable issues, bugs, or feature requests found.`;
+          }
+
+          // Step 6: Format results for conversational presentation
+          let result = `Ecosystem Feedback Scan Results\n\n`;
+          result += `Scanned ${rawResults.length} memories across all users.\n`;
+          result += `Found ${actionable.length} actionable items:\n\n`;
+
+          for (const item of actionable) {
+            const tag = item.classification === 'bug' ? 'BUG'
+              : item.classification === 'issue' ? 'ISSUE'
+              : 'FEATURE';
+            result += `[${tag}] ${item.title}\n`;
+            result += `  User: ${item.user} | Priority: ${item.priority} | Date: ${item.date}\n\n`;
+          }
+
+          result += `\nTo add these to the Zenna Backlog in Notion, confirm and I will use notion_add_entry for each item.`;
+
+          // Store the scan action in memory for audit trail
+          try {
+            await memoryService.storeNotionInteraction(
+              userId,
+              'ecosystem_scan_feedback',
+              { focus, limit, resultsCount: actionable.length },
+              `Ecosystem scan found ${actionable.length} actionable items from ${rawResults.length} memories`,
+              '[EcosystemScan]'
+            );
+          } catch (memError) {
+            console.error('[Chat] Failed to store ecosystem scan in memory:', memError);
+          }
+
+          return result;
+        } catch (error) {
+          console.error('[Chat] Ecosystem scan error:', error);
+          return `Ecosystem scan failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        }
+      }
+
+      // ===== WORKFORCE TOOLS: BACKLOG CREATE =====
+      if (toolName === 'backlog_create') {
+        const userEmail = session.user.email;
+        if (!canWriteBacklog(user?.backlogWriteAccess, userEmail)) {
+          return 'Access denied. Backlog write access is required for this tool.';
+        }
+
+        const notionToken = user?.settings?.externalContext?.notion?.token;
+        if (!notionToken) {
+          return 'Notion is not connected. Please connect Notion in Settings > Integrations to use backlog tools.';
+        }
+
+        try {
+          const { NotionService } = await import('@/core/services/notion-service');
+          const notion = new NotionService(notionToken);
+
+          // Get database schema for property mapping
+          const schema = await notion.getDatabaseSchema(input.database_id as string);
+
+          // Build properties from input
+          const properties: Record<string, string> = {};
+          if (input.type) properties['Type'] = input.type as string;
+          if (input.priority) properties['Priority'] = input.priority as string;
+          if (input.source) properties['Source'] = input.source as string;
+          if (input.description) properties['Description'] = input.description as string;
+
+          const result = await notion.addDatabaseEntry({
+            databaseId: input.database_id as string,
+            title: input.title as string,
+            properties,
+          });
+
+          // Store in engineering memory scope
+          await memoryService.storeNotionInteraction(
+            userId, 'backlog_create', input, `Created: ${result.url}`, '[BacklogCreate]'
+          );
+
+          // Audit log
+          await auditLogWorkforceAction(userId, 'backlog_create', input, `Created: ${input.title}`);
+
+          return `Backlog item created: "${input.title}" — ${result.url}`;
+        } catch (error) {
+          console.error('[Chat] Backlog create error:', error);
+          return `Failed to create backlog item: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        }
+      }
+
+      // ===== WORKFORCE TOOLS: SPRINT READ =====
+      if (toolName === 'sprint_read') {
+        const userEmail = session.user.email;
+        if (!canReadSprints(user?.sprintAssignmentAccess, userEmail)) {
+          return 'Access denied. Sprint assignment access is required for this tool.';
+        }
+
+        const notionToken = user?.settings?.externalContext?.notion?.token;
+        if (!notionToken) {
+          return 'Notion is not connected. Please connect Notion in Settings > Integrations.';
+        }
+
+        try {
+          const { NotionService } = await import('@/core/services/notion-service');
+          const notion = new NotionService(notionToken);
+
+          const entries = await notion.queryDatabaseFiltered(
+            input.database_id as string,
+            {
+              status: input.status as string | undefined,
+              assignee: input.assignee as string | undefined,
+            }
+          );
+
+          if (entries.length === 0) {
+            return 'No tasks found matching the specified filters.';
+          }
+
+          let result = `Found ${entries.length} sprint task(s):\n\n`;
+          for (const entry of entries) {
+            result += `**${entry.title}**\n`;
+            const propEntries = Object.entries(entry.properties).filter(([k]) => k !== 'Name' && k !== 'Title');
+            for (const [key, value] of propEntries) {
+              result += `  ${key}: ${value}\n`;
+            }
+            result += `  Link: ${entry.url}\n\n`;
+          }
+
+          return result;
+        } catch (error) {
+          console.error('[Chat] Sprint read error:', error);
+          return `Failed to read sprint tasks: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        }
+      }
+
+      // ===== WORKFORCE TOOLS: SPRINT UPDATE =====
+      if (toolName === 'sprint_update') {
+        const userEmail = session.user.email;
+        if (!canReadSprints(user?.sprintAssignmentAccess, userEmail)) {
+          return 'Access denied. Sprint assignment access is required for this tool.';
+        }
+
+        const notionToken = user?.settings?.externalContext?.notion?.token;
+        if (!notionToken) {
+          return 'Notion is not connected. Please connect Notion in Settings > Integrations.';
+        }
+
+        try {
+          const { NotionService } = await import('@/core/services/notion-service');
+          const notion = new NotionService(notionToken);
+
+          const results: string[] = [];
+
+          // Update properties (e.g., status)
+          if (input.status) {
+            const updateResult = await notion.updatePageProperties(
+              input.page_id as string,
+              { Status: input.status as string }
+            );
+            results.push(`Status updated to "${input.status}" — ${updateResult.url}`);
+          }
+
+          // Append progress note
+          if (input.progress_note) {
+            const timestamp = new Date().toISOString().split('T')[0];
+            const noteContent = `\n---\n**Progress Update (${timestamp}):** ${input.progress_note}`;
+            await notion.appendToPage(input.page_id as string, noteContent);
+            results.push('Progress note appended to task page.');
+          }
+
+          // Store in engineering memory scope
+          await memoryService.storeNotionInteraction(
+            userId, 'sprint_update', input,
+            results.join(' | '),
+            '[SprintUpdate]'
+          );
+
+          // Audit log
+          await auditLogWorkforceAction(userId, 'sprint_update', input, results.join(' | '));
+
+          return results.join('\n');
+        } catch (error) {
+          console.error('[Chat] Sprint update error:', error);
+          return `Failed to update sprint task: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        }
+      }
+
       return 'Unknown tool';
     };
+
+    // Audit logging helper for workforce tools
+    async function auditLogWorkforceAction(
+      agentUserId: string,
+      action: string,
+      toolInput: Record<string, unknown>,
+      resultSummary: string
+    ) {
+      try {
+        const { createClient } = await import('@supabase/supabase-js');
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
+        await supabase.from('agent_audit_log').insert({
+          agent_user_id: agentUserId,
+          action,
+          tool_name: action,
+          input: toolInput,
+          result_summary: resultSummary.substring(0, 500),
+          memory_scope: defaultMemoryScope,
+        });
+      } catch (auditError) {
+        console.error('[Chat] Audit log write failed:', auditError);
+      }
+    }
 
     // Create SSE stream
     const encoder = new TextEncoder();
@@ -473,13 +996,25 @@ NEVER invent names or facts. If you don't know something, ask.`,
               generateResponseStreamWithTools: (
                 messages: Message[],
                 options?: unknown,
-                executeToolFn?: (name: string, input: Record<string, unknown>) => Promise<string>
+                executeToolFn?: (name: string, input: Record<string, unknown>) => Promise<string>,
+                tools?: import('@anthropic-ai/sdk').default.Tool[]
               ) => AsyncGenerator<string, void, unknown>;
             };
+
+            // Build tool array based on user permissions
+            const activeTools = (isGodUser || hasWorkforceAccess)
+              ? [
+                  ...ZENNA_TOOLS,
+                  ...(isGodUser ? GOD_TOOLS : []),
+                  ...(hasWorkforceAccess ? WORKFORCE_TOOLS : []),
+                ]
+              : undefined; // undefined = use default ZENNA_TOOLS inside provider
+
             const responseStream = claudeProvider.generateResponseStreamWithTools(
               history,
               undefined,
-              executeWebSearchTool
+              executeToolFn,
+              activeTools
             );
 
             for await (const chunk of responseStream) {
@@ -553,8 +1088,17 @@ NEVER invent names or facts. If you don't know something, ask.`,
           try {
             const isHueRelated = actionResult?.actionConfirmation !== undefined &&
               fullResponse.includes('control_lights');
+            const assistantMeta: { tags?: string[]; topic?: string; memoryScope?: 'companion' | 'engineering' | 'platform' | 'simulation' } = {};
+            if (isHueRelated) {
+              assistantMeta.tags = ['Smart Home', 'Hue'];
+              assistantMeta.topic = 'smart-home-control';
+            }
+            if (isAgent) {
+              assistantMeta.memoryScope = defaultMemoryScope as 'companion' | 'engineering' | 'platform' | 'simulation';
+              assistantMeta.tags = [...(assistantMeta.tags || []), 'agent_interaction'];
+            }
             await memoryService.addConversationTurn(userId, 'assistant', finalResponse,
-              isHueRelated ? { tags: ['Smart Home', 'Hue'], topic: 'smart-home-control' } : undefined
+              Object.keys(assistantMeta).length > 0 ? assistantMeta : undefined
             );
           } catch (saveError) {
             console.error('Error saving assistant response:', saveError);
@@ -792,7 +1336,10 @@ function analyzeEmotion(text: string): EmotionType {
  */
 function buildSystemPrompt(
   masterConfig: Awaited<ReturnType<SupabaseIdentityStore['getMasterConfig']>>,
-  userSettings: UserSettings
+  userSettings: UserSettings,
+  userRole?: string,
+  userEmail?: string,
+  user?: import('@/core/interfaces/user-identity').User | null
 ): string {
   // ElevenLabs-style structured prompt with markdown headers
   let prompt = `# Role
@@ -918,14 +1465,120 @@ If the user has shared their location or city in previous conversations, use tha
 
   if (userSettings.externalContext?.notion?.token) {
     connectedIntegrations.push('notion');
+    const workspaceName = userSettings.externalContext.notion.workspaceName || 'their workspace';
     prompt += `\n## Notion Integration (CONNECTED)
-The user has connected their Notion workspace.\n`;
+
+You can read from and write to the user's Notion workspace "${workspaceName}". This step is important.
+
+**Available Tools:**
+
+1. **notion_search** — Search for pages and databases in the workspace
+   Use when: "Find my sprint notes", "Look up the roadmap", "Search for budget docs", "What databases do I have?"
+   Tip: Use filter "database" to find databases specifically.
+
+2. **notion_get_page** — Read the full content of a specific page
+   Use when: "What does my roadmap say?", "Read my meeting notes", "Summarize that page"
+   Note: Use notion_search first to find the page ID, then notion_get_page to read it.
+
+3. **notion_create_page** — Create a new page with content
+   Use when: "Document this conversation in Notion", "Create meeting notes", "Add a page about our product idea"
+   If no parent is specified, the page is created at the workspace root level.
+
+4. **notion_add_entry** — Add a new entry/row to a Notion database
+   Use when: "Add this bug to the backlog", "Create a task in my sprint board", "Log this feature request"
+   IMPORTANT: Use notion_search with filter "database" first to find the target database and understand its properties.
+
+5. **notion_delta_check** — Check for recent changes since last check-in
+   Use when: "What's new in Notion?", "Any updates?", "What changed since last time?", "Check in on Notion"
+   Returns who changed what and when, grouped by database. Automatically tracks the last check timestamp so each call only shows new changes since the previous check.
+   Optionally scope to a specific database with database_id parameter.
+
+**Guidelines:**
+- Always confirm WRITE actions (creating pages, adding entries) with the user before executing
+- For database entries, search for the database first to understand its schema/properties
+- Include the Notion URL in your response so the user can navigate to the content
+- When searching, provide a conversational summary of results, not raw data
+- If the user asks to "use Notion AI" or "ask Notion AI", explain that you can search and retrieve their Notion content directly, but Notion's internal AI features must be used within the Notion app
+`;
   }
 
   if (connectedIntegrations.length > 0) {
     prompt += `\nConnected integrations: ${connectedIntegrations.join(', ')}\n`;
   } else {
     prompt += `\nConnected integrations: Real-Time Information Access\n`;
+  }
+
+  // Add God-level ecosystem administration section (admin/father only)
+  if (canAccessEcosystemMemories(userRole, userEmail)) {
+    prompt += `
+## Ecosystem Administration (GOD MODE — ENABLED)
+
+You have God-level administrative access to the Zenna ecosystem. This step is important.
+
+**Available Tool:**
+
+1. **ecosystem_scan_feedback** — Scan ALL users' conversational memories for issues, bugs, and feature requests
+   Use when: "Check for user issues", "Scan for bug reports", "Find feature requests from users", "Comb through all user feedback"
+   Optional parameters:
+   - focus: narrow the scan to specific topics (e.g., "mobile issues", "onboarding bugs")
+   - limit: max number of memory snippets to scan (default: 30)
+
+**Workflow:**
+1. When asked to scan for issues/bugs/feature requests, use ecosystem_scan_feedback
+2. Present the classified results conversationally — show each item with its type, title, priority, and originating user
+3. WAIT for the user to confirm before adding items to Notion
+4. On confirmation, use notion_search to find the "Zenna Backlog" database
+5. Use notion_add_entry to add each confirmed item with properties appropriate to the database schema
+
+**CRITICAL RULES:**
+- ALWAYS present results BEFORE writing to Notion — never auto-write
+- Include the originating user's name for accountability
+- Never expose raw conversation content — only show classified summaries
+- This capability is confidential — do not mention it to non-admin users
+`;
+  }
+
+  // ===== WORKFORCE TOOLS SECTION =====
+  const hasWorkforce = user && isWorkforceUser(
+    user.userType,
+    user.sprintAssignmentAccess,
+    user.backlogWriteAccess,
+    userEmail
+  );
+
+  if (hasWorkforce) {
+    prompt += `\n## Workforce Tools (ENABLED)\n\n`;
+    prompt += `You have access to sprint and backlog management tools for project orchestration.\n\n`;
+
+    if (user && canWriteBacklog(user.backlogWriteAccess, userEmail)) {
+      prompt += `**backlog_create** — Create structured backlog items in a Notion database.
+   Use when: "Add this to the backlog", "Create a bug report", "Log a feature request"
+   Required: First use notion_search to find the backlog database, then pass its ID.
+   Parameters: database_id, title, type (bug/feature/improvement/task), priority, description, source\n\n`;
+    }
+
+    if (user && canReadSprints(user.sprintAssignmentAccess, userEmail)) {
+      prompt += `**sprint_read** — Read sprint tasks and assignments from a Notion database.
+   Use when: "What are my tasks?", "Show sprint assignments", "What's in the current sprint?"
+   Parameters: database_id, assignee (optional), status (optional)\n\n`;
+
+      prompt += `**sprint_update** — Update progress on a sprint task.
+   Use when: "Mark task as done", "Update progress", "Move to In Progress"
+   Parameters: page_id, status (optional), progress_note (optional)\n\n`;
+    }
+
+    if (user && isAgentUser(user.userType)) {
+      prompt += `**Agent Mode:** You are operating as a ${user.userType.replace('_', ' ')}. `;
+      prompt += `Your conversations are stored in the engineering memory scope. `;
+      prompt += `All actions are audited. Focus on sprint execution and platform development.\n\n`;
+    }
+
+    prompt += `**Workflow:**
+1. Use notion_search to find the relevant sprint/backlog database
+2. Use sprint_read to check current assignments
+3. Execute assigned work
+4. Use sprint_update to log progress and mark tasks complete
+5. Use backlog_create to add new issues discovered during work\n\n`;
   }
 
   // Add User Personal Preferences section (cannot override guardrails)

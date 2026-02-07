@@ -101,11 +101,11 @@ export async function GET() {
     const memoryService = createMemoryService();
     await memoryService.initialize();
 
-    // Test memory search
+    // Test memory search - use very low threshold to see what's being returned
     const testQuery = 'family';
     const testResults = await memoryService.searchMemories(session.user.id, testQuery, {
-      topK: 10,
-      threshold: 0.3, // Lower threshold to see more results
+      topK: 20,
+      threshold: 0.1, // Very low threshold to debug what's available
     });
 
     // Get direct Qdrant info
