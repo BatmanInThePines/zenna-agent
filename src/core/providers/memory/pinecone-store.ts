@@ -390,17 +390,25 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
 
 /**
  * Google embedding provider (using Gemini)
+ *
+ * Uses gemini-embedding-001 model which supports flexible output dimensions.
+ * IMPORTANT: Existing Qdrant data uses 768 dimensions, so we must maintain
+ * this for compatibility. The model supports 128-3072 dimensions via
+ * Matryoshka Representation Learning.
  */
 export class GeminiEmbeddingProvider implements EmbeddingProvider {
   private apiKey: string;
+  private outputDimensionality: number;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, outputDimensionality: number = 768) {
     this.apiKey = apiKey;
+    this.outputDimensionality = outputDimensionality;
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
+    // Use gemini-embedding-001 (updated from deprecated text-embedding-004)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${this.apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${this.apiKey}`,
       {
         method: 'POST',
         headers: {
@@ -408,12 +416,16 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
         },
         body: JSON.stringify({
           content: { parts: [{ text }] },
+          // Maintain 768 dimensions for compatibility with existing Qdrant vectors
+          outputDimensionality: this.outputDimensionality,
         }),
       }
     );
 
     if (!response.ok) {
-      throw new Error(`Embedding generation failed: ${response.statusText}`);
+      const errorText = await response.text();
+      console.error('[GeminiEmbeddingProvider] API error:', response.status, errorText);
+      throw new Error(`Embedding generation failed: ${response.status} - ${response.statusText}`);
     }
 
     const data = await response.json();
