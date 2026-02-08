@@ -690,22 +690,44 @@ export class MemoryService {
     console.log(`[MemoryService] Building memory context for: "${currentMessage.substring(0, 50)}..."`);
     console.log(`[MemoryService] Vector provider: ${this.vectorProvider}, hasLongTermStore: ${!!this.longTermStore}`);
 
-    // First, search for facts specifically (these are high-value personal memories)
-    const factResults = await this.searchMemories(userId, currentMessage, {
-      topK: 10,
-      threshold: 0.1, // Very low threshold for facts - we want to find them
-      types: ['fact', 'preference'],
-    });
+    // PERFORMANCE FIX: Add timeout to prevent hanging on slow vector DB
+    const MEMORY_TIMEOUT_MS = 8000; // 8 second timeout for memory retrieval
+
+    const timeoutPromise = <T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => {
+      return Promise.race([
+        promise,
+        new Promise<T>((resolve) => {
+          setTimeout(() => {
+            console.warn(`[MemoryService] Memory search timed out after ${ms}ms, using fallback`);
+            resolve(fallback);
+          }, ms);
+        }),
+      ]);
+    };
+
+    // PERFORMANCE FIX: Run both searches in parallel instead of sequential
+    const [factResults, conversationResults] = await Promise.all([
+      timeoutPromise(
+        this.searchMemories(userId, currentMessage, {
+          topK: 10,
+          threshold: 0.1, // Very low threshold for facts - we want to find them
+          types: ['fact', 'preference'],
+        }),
+        MEMORY_TIMEOUT_MS,
+        [] // Return empty array on timeout
+      ),
+      timeoutPromise(
+        this.searchMemories(userId, currentMessage, {
+          topK: 20,
+          threshold: 0.2, // Slightly higher for conversations
+          types: ['conversation'],
+        }),
+        MEMORY_TIMEOUT_MS,
+        [] // Return empty array on timeout
+      ),
+    ]);
 
     console.log(`[MemoryService] Found ${factResults.length} facts/preferences`);
-
-    // Then search for relevant conversations
-    const conversationResults = await this.searchMemories(userId, currentMessage, {
-      topK: 20,
-      threshold: 0.2, // Slightly higher for conversations
-      types: ['conversation'],
-    });
-
     console.log(`[MemoryService] Found ${conversationResults.length} conversation memories`);
 
     // Combine and deduplicate
