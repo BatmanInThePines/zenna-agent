@@ -27,6 +27,7 @@ export default function KnowledgeIngestionIndicator({
   const [isVisible, setIsVisible] = useState(false);
   const [hideTimeout, setHideTimeout] = useState<NodeJS.Timeout | null>(null);
   const [brainImage, setBrainImage] = useState<HTMLImageElement | null>(null);
+  const [dismissed, setDismissed] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
   const completionAnnouncedRef = useRef<boolean>(false);
@@ -53,8 +54,9 @@ export default function KnowledgeIngestionIndicator({
           const prevStatus = progress?.status;
           setProgress(data);
 
-          // Show indicator if processing
+          // Show indicator if actively processing (always show, even if dismissed)
           if (data.status === 'processing') {
+            setDismissed(false); // Reset dismissed on new processing
             setIsVisible(true);
             completionAnnouncedRef.current = false;
             if (hideTimeout) {
@@ -62,19 +64,27 @@ export default function KnowledgeIngestionIndicator({
               setHideTimeout(null);
             }
           } else if (data.status === 'completed' || data.status === 'error') {
-            // Show completion briefly, then hide
-            setIsVisible(true);
+            // Don't re-show if user already dismissed this state
+            if (dismissed) return;
 
-            // Trigger completion callback only once when transitioning to completed
-            if (data.status === 'completed' && prevStatus === 'processing' && !completionAnnouncedRef.current) {
-              completionAnnouncedRef.current = true;
-              onIngestionComplete?.();
+            // Only show if this is a fresh transition from processing
+            if (prevStatus === 'processing') {
+              setIsVisible(true);
+
+              // Trigger completion callback only once
+              if (data.status === 'completed' && !completionAnnouncedRef.current) {
+                completionAnnouncedRef.current = true;
+                onIngestionComplete?.();
+              }
+
+              const timeout = setTimeout(() => {
+                setIsVisible(false);
+              }, 5000);
+              setHideTimeout(timeout);
+            } else if (!isVisible) {
+              // Stale status from previous session — don't show at all
+              return;
             }
-
-            const timeout = setTimeout(() => {
-              setIsVisible(false);
-            }, 5000); // Extended to 5 seconds to show completion message
-            setHideTimeout(timeout);
           }
         }
       } catch (error) {
@@ -85,8 +95,8 @@ export default function KnowledgeIngestionIndicator({
     // Initial check
     checkProgress();
 
-    // Set up polling
-    const interval = setInterval(checkProgress, pollingInterval);
+    // Set up polling (less frequent when idle/dismissed)
+    const interval = setInterval(checkProgress, dismissed ? 10000 : pollingInterval);
 
     return () => {
       clearInterval(interval);
@@ -94,7 +104,7 @@ export default function KnowledgeIngestionIndicator({
         clearTimeout(hideTimeout);
       }
     };
-  }, [pollingInterval, hideTimeout, onIngestionComplete, progress?.status]);
+  }, [pollingInterval, hideTimeout, onIngestionComplete, progress?.status, dismissed, isVisible]);
 
   // Animated brain icon with fill-up effect
   useEffect(() => {
@@ -306,7 +316,7 @@ export default function KnowledgeIngestionIndicator({
       {/* Close button for completed/error states */}
       {(progress?.status === 'completed' || progress?.status === 'error') && (
         <button
-          onClick={() => setIsVisible(false)}
+          onClick={() => { setIsVisible(false); setDismissed(true); }}
           className="ml-2 p-1 hover:bg-zenna-border rounded-full transition-colors"
         >
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
