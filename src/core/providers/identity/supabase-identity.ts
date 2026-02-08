@@ -453,18 +453,23 @@ export class SupabaseIdentityStore implements IdentityStore {
     sessionId: string,
     userId: string
   ): Promise<Array<{ role: string; content: string; created_at: string }>> {
+    // PERFORMANCE FIX: Limit to last 100 turns to prevent timeout on accounts with
+    // long conversation histories. The chat-stream route only uses the last 50 anyway.
+    // We fetch 100 as a buffer and order descending, then reverse to get chronological order.
     const { data, error } = await this.client
       .from('session_turns')
       .select('role, content, created_at')
       .eq('user_id', userId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(100);
 
     if (error) {
       console.error('Error fetching session history:', error);
       return [];
     }
 
-    return data || [];
+    // Reverse to get chronological order (oldest first)
+    return (data || []).reverse();
   }
 
   /**
