@@ -187,20 +187,32 @@ export const authConfig: NextAuthConfig = {
           token.isFather = dbUser.email === ADMIN_EMAIL;
           token.onboardingCompleted = dbUser.onboarding_completed;
 
-          // Get subscription status
-          const { data: subscription } = await supabase
-            .from('subscriptions')
-            .select('tier, status, expires_at')
-            .eq('user_id', dbUser.id)
-            .eq('status', 'active')
-            .single();
+          // Get subscription status - for admins, grant unlimited access even without subscription record
+          const isAdminUser = dbUser.role === 'admin' || dbUser.email === ADMIN_EMAIL;
 
-          if (subscription) {
+          if (isAdminUser) {
+            // Admin/Father users always have full access - create synthetic subscription
             token.subscription = {
-              tier: subscription.tier,
-              status: subscription.status,
-              expiresAt: subscription.expires_at,
+              tier: 'admin',
+              status: 'active',
+              expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(), // 1 year from now
             };
+          } else {
+            // Regular users - check actual subscription
+            const { data: subscription } = await supabase
+              .from('subscriptions')
+              .select('tier, status, expires_at')
+              .eq('user_id', dbUser.id)
+              .eq('status', 'active')
+              .single();
+
+            if (subscription) {
+              token.subscription = {
+                tier: subscription.tier,
+                status: subscription.status,
+                expiresAt: subscription.expires_at,
+              };
+            }
           }
         }
       } else if (token.userId) {
@@ -218,20 +230,35 @@ export const authConfig: NextAuthConfig = {
           token.isFather = dbUser.email === ADMIN_EMAIL;
           token.onboardingCompleted = dbUser.onboarding_completed;
 
-          // Refresh subscription status
-          const { data: subscription } = await supabase
-            .from('subscriptions')
-            .select('tier, status, expires_at')
-            .eq('user_id', dbUser.id)
-            .eq('status', 'active')
-            .single();
+          // Refresh subscription status - for admins, grant unlimited access
+          const isAdminUser = dbUser.role === 'admin' || dbUser.email === ADMIN_EMAIL;
 
-          if (subscription) {
+          if (isAdminUser) {
+            // Admin/Father users always have full access - create synthetic subscription
             token.subscription = {
-              tier: subscription.tier,
-              status: subscription.status,
-              expiresAt: subscription.expires_at,
+              tier: 'admin',
+              status: 'active',
+              expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
             };
+          } else {
+            // Regular users - check actual subscription
+            const { data: subscription } = await supabase
+              .from('subscriptions')
+              .select('tier, status, expires_at')
+              .eq('user_id', dbUser.id)
+              .eq('status', 'active')
+              .single();
+
+            if (subscription) {
+              token.subscription = {
+                tier: subscription.tier,
+                status: subscription.status,
+                expiresAt: subscription.expires_at,
+              };
+            } else {
+              // No active subscription - clear any stale subscription data
+              token.subscription = undefined;
+            }
           }
         }
       }
