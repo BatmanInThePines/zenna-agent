@@ -6,11 +6,13 @@ interface SubscriptionCardProps {
   id: string;
   name: string;
   price: string;
-  priceType: 'free' | 'one-time' | 'monthly';
+  priceType: 'free' | 'one-time' | 'monthly' | 'contact';
   features: string[];
   isAvailable: boolean;
   highlighted?: boolean;
   comingSoon?: boolean;
+  subtitle?: string;
+  description?: string;
   onSelect: (id: string) => void;
   isLoading?: boolean;
 }
@@ -24,6 +26,8 @@ export function SubscriptionCard({
   isAvailable,
   highlighted = false,
   comingSoon = false,
+  subtitle,
+  description,
   onSelect,
   isLoading = false,
 }: SubscriptionCardProps) {
@@ -33,6 +37,7 @@ export function SubscriptionCard({
     free: 'for 90 days',
     'one-time': 'one-time',
     monthly: '/month',
+    contact: '',
   }[priceType];
 
   return (
@@ -72,8 +77,14 @@ export function SubscriptionCard({
         <h3 className="text-xl font-semibold text-white mb-2">{name}</h3>
         <div className="flex items-baseline justify-center gap-1">
           <span className="text-3xl font-bold text-white">{price}</span>
-          <span className="text-white/50 text-sm">{priceLabel}</span>
+          {priceLabel && <span className="text-white/50 text-sm">{priceLabel}</span>}
         </div>
+        {subtitle && (
+          <p className="text-sm font-medium text-purple-300 mt-2">{subtitle}</p>
+        )}
+        {description && (
+          <p className="text-xs text-white/40 mt-2 leading-relaxed">{description}</p>
+        )}
       </div>
 
       {/* Features */}

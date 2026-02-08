@@ -7,7 +7,6 @@ import { Suspense } from 'react';
 function LoginContent() {
   const searchParams = useSearchParams();
   const error = searchParams.get('error');
-  const mode = searchParams.get('mode') as 'signin' | 'signup' | null;
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-br from-[#0a0a0f] via-[#0f0f18] to-[#0a0a0f]">
@@ -53,7 +52,7 @@ function LoginContent() {
         )}
 
         {/* Auth Form */}
-        <AuthForm initialMode={mode === 'signup' ? 'signup' : 'signin'} />
+        <AuthForm />
 
         {/* Footer */}
         <div className="mt-12 text-center space-y-2">

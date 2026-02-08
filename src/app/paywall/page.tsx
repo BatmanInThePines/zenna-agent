@@ -164,7 +164,7 @@ function PaywallContent() {
         <div className="absolute top-1/2 right-1/3 w-64 h-64 bg-green-500/5 rounded-full blur-[80px] animate-pulse delay-500" />
       </div>
 
-      <div className="relative z-10 max-w-6xl mx-auto">
+      <div className="relative z-10 max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-12">
           <h1 className="text-4xl md:text-5xl font-light tracking-[0.2em] text-white mb-4">
@@ -223,7 +223,7 @@ function PaywallContent() {
         )}
 
         {/* Subscription Tiers Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
           {SUBSCRIPTION_TIERS.map((tier) => (
             <SubscriptionCard
               key={tier.id}
@@ -235,6 +235,8 @@ function PaywallContent() {
               isAvailable={tier.isAvailable}
               highlighted={tier.highlighted}
               comingSoon={tier.comingSoon}
+              subtitle={tier.subtitle}
+              description={tier.description}
               onSelect={handleSelectTier}
               isLoading={isLoading}
             />

@@ -3,10 +3,11 @@
  *
  * Subscription Tiers:
  * - Free Trial: $0 for 90 days (12 sessions/day)
- * - Standard: $vv one-time
- * - Pro: $xx one-time
- * - Platinum: $yy monthly subscription
- * - Hardware Bundle: $zzz one-time add-on
+ * - Standard: $9.99/mo monthly subscription
+ * - Pro: $29.99/mo monthly subscription
+ * - Platinum: $89.99/mo monthly subscription
+ * - Enterprise: Contact us (private workforce)
+ * - Hardware Bundle: $499 one-time add-on
  *
  * NOTE: For initial release, only Free Trial is selectable.
  * Other tiers are visible but greyed out.
@@ -45,16 +46,18 @@ export const stripe = {
 
 // Subscription tier definitions
 export interface SubscriptionTier {
-  id: 'trial' | 'standard' | 'pro' | 'platinum';
+  id: 'trial' | 'standard' | 'pro' | 'platinum' | 'enterprise';
   name: string;
   price: string;
   priceAmount: number; // In cents
-  priceType: 'free' | 'one-time' | 'monthly';
+  priceType: 'free' | 'one-time' | 'monthly' | 'contact';
   features: string[];
   isAvailable: boolean; // Only trial is true for initial release
   highlighted?: boolean;
   stripePriceId?: string;
   comingSoon?: boolean;
+  subtitle?: string; // e.g. "Your Private Workforce"
+  description?: string; // Extended description text below subtitle
 }
 
 export const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
@@ -128,6 +131,22 @@ export const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
     isAvailable: false,
     comingSoon: true,
     // stripePriceId: 'price_xxx' // Add when Stripe product is created
+  },
+  {
+    id: 'enterprise',
+    name: 'Enterprise',
+    price: '$Ask Us',
+    priceAmount: 0,
+    priceType: 'contact',
+    subtitle: 'Your Private Workforce',
+    description: 'Register your interest and a member of the team will be in touch (register by talking to Zenna — see bottom corner of screen)',
+    features: [
+      'All Pro features',
+      'An AI Agent Workforce capable of building stuff',
+      '100,000 Credits toward workforce',
+    ],
+    isAvailable: false,
+    comingSoon: true,
   },
 ];
 

@@ -5,7 +5,6 @@ import { useState } from 'react';
 
 interface AuthProviderButtonProps {
   provider: 'google' | 'apple' | 'github';
-  mode: 'signin' | 'signup';
 }
 
 const providerConfig = {
@@ -56,10 +55,9 @@ const providerConfig = {
   },
 };
 
-export function AuthProviderButton({ provider, mode }: AuthProviderButtonProps) {
+export function AuthProviderButton({ provider }: AuthProviderButtonProps) {
   const [isLoading, setIsLoading] = useState(false);
   const config = providerConfig[provider];
-  const actionText = mode === 'signin' ? 'Sign in' : 'Sign up';
 
   const handleClick = async () => {
     setIsLoading(true);
@@ -88,7 +86,7 @@ export function AuthProviderButton({ provider, mode }: AuthProviderButtonProps) 
       ) : (
         config.icon
       )}
-      <span>{isLoading ? 'Connecting...' : `${actionText} with ${config.name}`}</span>
+      <span>{isLoading ? 'Connecting...' : `Continue with ${config.name}`}</span>
     </button>
   );
 }
