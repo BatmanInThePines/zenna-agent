@@ -139,17 +139,8 @@ export const authConfig: NextAuthConfig = {
             session_state: account.session_state as string | undefined,
           });
 
-          // Create free trial subscription (90 days)
-          const trialEndDate = new Date();
-          trialEndDate.setDate(trialEndDate.getDate() + 90);
-
-          await supabase.from('subscriptions').insert({
-            user_id: newUser.id,
-            tier: 'trial',
-            status: 'active',
-            expires_at: trialEndDate.toISOString(),
-            hardware_bundle: false,
-          });
+          // NOTE: No subscription created here — user MUST visit paywall
+          // and explicitly select a plan (trial or paid) before accessing chat.
 
           // Initialize user memories metadata
           await supabase.from('user_memories').insert({

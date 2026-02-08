@@ -26,6 +26,7 @@ function PaywallContent() {
   const [isLoading, setIsLoading] = useState(false);
   const [hardwareBundleSelected, setHardwareBundleSelected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasUsedTrial, setHasUsedTrial] = useState(false);
 
   const paymentStatus = searchParams.get('payment');
 
@@ -48,16 +49,26 @@ function PaywallContent() {
           return;
         }
 
-        // If already onboarded, redirect to chat
-        if (data.user?.onboardingCompleted) {
+        // Check if user has an active NON-expired subscription
+        const sub = data.user?.subscription;
+        const isActive = sub?.status === 'active';
+        const isExpired = sub?.expiresAt && new Date(sub.expiresAt) <= new Date();
+
+        // If user has active, non-expired paid subscription — go to chat
+        if (isActive && !isExpired && sub?.tier !== 'trial') {
           router.push('/chat');
           return;
         }
 
-        // If has active subscription, redirect to chat
-        if (data.user?.subscription?.status === 'active') {
-          router.push('/chat?welcome=true');
+        // If user has active trial that hasn't expired — go to chat
+        if (isActive && !isExpired && sub?.tier === 'trial') {
+          router.push('/chat');
           return;
+        }
+
+        // If user ever had a trial (expired or cancelled), they can't get another
+        if (sub?.tier === 'trial') {
+          setHasUsedTrial(true);
         }
 
         setUser(data.user);
@@ -115,8 +126,8 @@ function PaywallContent() {
           throw new Error(data.error || 'Failed to activate trial');
         }
 
-        // Redirect to chat/onboarding
-        router.push('/chat?welcome=true');
+        // Redirect to chat
+        router.push('/chat');
         return;
       }
 
@@ -211,7 +222,7 @@ function PaywallContent() {
         )}
         {paymentStatus === 'cancelled' && (
           <div className="mb-8 p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 text-center">
-            Payment cancelled. You can try again or start with the free trial.
+            Payment cancelled. You can try again below.
           </div>
         )}
 
@@ -222,9 +233,25 @@ function PaywallContent() {
           </div>
         )}
 
+        {/* Trial Expired Banner */}
+        {hasUsedTrial && (
+          <div className="mb-8 p-6 rounded-xl bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/20">
+            <div className="text-center">
+              <p className="text-orange-400 font-medium text-lg">
+                Your free trial has ended
+              </p>
+              <p className="text-white/50 text-sm mt-1">
+                Choose a subscription plan below to continue using Zenna. Your memories and settings are preserved.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Subscription Tiers Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
-          {SUBSCRIPTION_TIERS.map((tier) => (
+        <div className={`grid grid-cols-1 md:grid-cols-2 ${hasUsedTrial ? 'lg:grid-cols-4' : 'lg:grid-cols-5'} gap-6 mb-8`}>
+          {SUBSCRIPTION_TIERS
+            .filter((tier) => !hasUsedTrial || tier.id !== 'trial')
+            .map((tier) => (
             <SubscriptionCard
               key={tier.id}
               id={tier.id}
@@ -233,7 +260,7 @@ function PaywallContent() {
               priceType={tier.priceType}
               features={tier.features}
               isAvailable={tier.isAvailable}
-              highlighted={tier.highlighted}
+              highlighted={!hasUsedTrial ? tier.highlighted : tier.id === 'standard'}
               comingSoon={tier.comingSoon}
               subtitle={tier.subtitle}
               description={tier.description}
@@ -259,9 +286,9 @@ function PaywallContent() {
               Free Trial Details
             </h3>
             <ul className="text-sm text-white/60 space-y-2">
-              <li>90-day free trial with full access to core features</li>
-              <li>Day 80: We will notify you that your trial is ending soon</li>
-              <li>Day 91: Choose a subscription to continue using Zenna</li>
+              <li>7-day free trial with full access to core features</li>
+              <li>Day 6: We will notify you that your trial is ending soon</li>
+              <li>Day 8: Choose a subscription to continue using Zenna</li>
               <li>Your memories and settings are preserved when you upgrade</li>
             </ul>
           </div>

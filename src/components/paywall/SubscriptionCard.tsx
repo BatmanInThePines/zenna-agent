@@ -34,7 +34,7 @@ export function SubscriptionCard({
   const [isHovered, setIsHovered] = useState(false);
 
   const priceLabel = {
-    free: 'for 90 days',
+    free: 'for 7 days',
     'one-time': 'one-time',
     monthly: '/month',
     contact: '',

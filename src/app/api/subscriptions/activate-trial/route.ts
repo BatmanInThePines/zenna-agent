@@ -2,7 +2,7 @@
  * API Route: Activate Free Trial
  * POST /api/subscriptions/activate-trial
  *
- * Creates a 90-day free trial subscription for the authenticated user.
+ * Creates a 7-day free trial subscription for the authenticated user.
  */
 
 import { NextResponse } from 'next/server';
@@ -57,9 +57,9 @@ export async function POST() {
       });
     }
 
-    // Calculate trial end date (90 days from now)
+    // Calculate trial end date (7 days from now)
     const trialEndDate = new Date();
-    trialEndDate.setDate(trialEndDate.getDate() + 90);
+    trialEndDate.setDate(trialEndDate.getDate() + 7);
 
     // Create trial subscription
     const { data: subscription, error: subError } = await supabase

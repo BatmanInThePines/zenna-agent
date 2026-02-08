@@ -2,15 +2,15 @@
  * Stripe Configuration for Zenna
  *
  * Subscription Tiers:
- * - Free Trial: $0 for 90 days (12 sessions/day)
+ * - Free Trial: $0 for 7 days (12 sessions/day)
  * - Standard: $9.99/mo monthly subscription
  * - Pro: $29.99/mo monthly subscription
  * - Platinum: $89.99/mo monthly subscription
  * - Enterprise: Contact us (private workforce)
  * - Hardware Bundle: $499 one-time add-on
  *
- * NOTE: For initial release, only Free Trial is selectable.
- * Other tiers are visible but greyed out.
+ * NOTE: Free Trial and Standard are selectable.
+ * Other tiers are visible but greyed out (Coming Soon).
  */
 
 import Stripe from 'stripe';
@@ -93,9 +93,8 @@ export const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
       'Image generation, document search',
       'Deeper research capabilities',
     ],
-    isAvailable: false,
-    comingSoon: true,
-    // stripePriceId: 'price_xxx' // Add when Stripe product is created
+    isAvailable: true,
+    stripePriceId: process.env.STRIPE_PRICE_STANDARD || undefined,
   },
   {
     id: 'pro',
