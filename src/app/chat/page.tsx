@@ -120,10 +120,20 @@ function ChatPageContent() {
         // Check if coming from paywall (with welcome param) or has active subscription
         const isFromPaywall = searchParams.get('welcome') === 'true';
         const hasActiveSubscription = data.user?.subscription?.status === 'active';
+        const isTrialActive = data.user?.subscription?.tier === 'trial' &&
+          data.user?.subscription?.status === 'active' &&
+          new Date(data.user?.subscription?.expiresAt) > new Date();
+        const isAdminOrFather = data.user?.isAdmin || data.user?.isFather || data.user?.role === 'admin';
 
-        // Redirect to paywall if user hasn't completed onboarding
-        // BUT skip if coming from paywall with welcome param or has active subscription
-        if (!data.user?.onboardingCompleted && !isFromPaywall && !hasActiveSubscription) {
+        // Determine if user should see paywall:
+        // - Admin/Father roles NEVER see paywall
+        // - Users with active paid subscription NEVER see paywall
+        // - Users with active trial NEVER see paywall
+        // - Users coming from paywall with welcome param bypass it
+        // - Only show paywall to users who haven't onboarded AND have no valid subscription
+        const shouldBypassPaywall = isAdminOrFather || hasActiveSubscription || isTrialActive || isFromPaywall;
+
+        if (!data.user?.onboardingCompleted && !shouldBypassPaywall) {
           router.push('/paywall');
           return;
         }

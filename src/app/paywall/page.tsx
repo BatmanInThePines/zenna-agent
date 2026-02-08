@@ -41,9 +41,22 @@ function PaywallContent() {
           return;
         }
 
+        // Admin/Father users NEVER see paywall - redirect immediately
+        const isAdminOrFather = data.user?.isAdmin || data.user?.isFather || data.user?.role === 'admin';
+        if (isAdminOrFather) {
+          router.push('/chat?welcome=true');
+          return;
+        }
+
         // If already onboarded, redirect to chat
         if (data.user?.onboardingCompleted) {
           router.push('/chat');
+          return;
+        }
+
+        // If has active subscription, redirect to chat
+        if (data.user?.subscription?.status === 'active') {
+          router.push('/chat?welcome=true');
           return;
         }
 

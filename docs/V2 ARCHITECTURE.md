@@ -2,8 +2,8 @@
 
 > **Document Purpose**: This document provides a comprehensive technical overview of the Zenna Agent system for consumption by Anthropic Claude models (Sonnet/Opus) when evaluating future feature considerations.
 >
-> **Last Updated**: February 6, 2026
-> **Version**: 1.2
+> **Last Updated**: February 8, 2026
+> **Version**: 1.3
 
 ---
 
@@ -1686,9 +1686,40 @@ async isFather(userId: string): Promise<boolean> {
 ```
 
 **Key States**:
-- `onboardingCompleted: false` → User redirected to `/paywall`
+- `onboardingCompleted: false` AND no active subscription → User redirected to `/paywall`
 - `onboardingCompleted: true` → User can access `/chat`
 - `?welcome=true` query param → Bypasses stale JWT check (used after payment)
+
+### Entitlement Validation (Updated Feb 2026)
+
+The chat page validates user entitlements using the following logic:
+
+```typescript
+// src/app/chat/page.tsx - Entitlement check
+const shouldBypassPaywall =
+  isAdminOrFather ||           // Admin/Father roles NEVER see paywall
+  hasActiveSubscription ||      // Users with active paid subscription
+  isTrialActive ||              // Users with active trial (not expired)
+  isFromPaywall;                // Users coming from paywall with ?welcome=true
+
+if (!data.user?.onboardingCompleted && !shouldBypassPaywall) {
+  router.push('/paywall');
+}
+```
+
+**Admin Synthetic Subscription**: Admin/Father users receive a synthetic subscription in the JWT:
+```typescript
+// In auth/config.ts JWT callback
+if (isAdminUser) {
+  token.subscription = {
+    tier: 'admin',
+    status: 'active',
+    expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
+```
+
+This ensures admins never see paywall even if they don't have a subscription record in the database.
 
 ---
 
