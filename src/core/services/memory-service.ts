@@ -610,6 +610,79 @@ export class MemoryService {
     return map;
   }
 
+  // ============================================
+  // NOTION SYNC HELPERS
+  // ============================================
+
+  /**
+   * Check if the long-term store is available.
+   */
+  hasLongTermMemory(): boolean {
+    return this.longTermStore !== null;
+  }
+
+  /**
+   * Store a chunk from Notion sync, tagged for easy identification/cleanup.
+   */
+  async storeNotionSync(
+    userId: string,
+    content: string,
+    pageTitle: string,
+    pageId: string
+  ): Promise<MemoryEntry | null> {
+    if (!this.longTermStore) return null;
+
+    return this.longTermStore.store({
+      userId,
+      content,
+      metadata: {
+        type: 'fact',
+        source: 'external',
+        importance: 0.7,
+        tags: ['notion', 'notion-sync', 'knowledge-base'],
+        topic: pageTitle,
+        contextSource: 'external_knowledge',
+        memoryScope: 'companion',
+      },
+    });
+  }
+
+  /**
+   * Estimate the user's current memory usage in MB.
+   * Uses Qdrant vector count with an approximate 4KB per vector point.
+   */
+  async estimateUserMemoryUsageMB(userId: string): Promise<number> {
+    if (!this.longTermStore) return 0;
+
+    // Only Qdrant supports countUserVectors
+    const store = this.longTermStore as QdrantLongTermStore;
+    if (typeof store.countUserVectors !== 'function') return 0;
+
+    try {
+      const count = await store.countUserVectors(userId);
+      // Estimate: each vector point ≈ 4KB (embedding + payload + metadata)
+      const estimatedBytes = count * 4096;
+      return Math.round((estimatedBytes / (1024 * 1024)) * 100) / 100;
+    } catch (error) {
+      console.error('[MemoryService] Failed to estimate memory usage:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Clear all notion-sync tagged memories for a user.
+   * Used when switching from Sync mode back to Query on Demand.
+   */
+  async clearNotionSync(userId: string): Promise<void> {
+    if (!this.longTermStore) return;
+
+    const store = this.longTermStore as QdrantLongTermStore;
+    if (typeof store.deleteByTag === 'function') {
+      await store.deleteByTag(userId, 'notion-sync');
+      console.log(`[MemoryService] Cleared notion-sync memories for user ${userId}`);
+    }
+  }
+
   /**
    * Build context from relevant memories for LLM prompt injection
    */
@@ -747,12 +820,6 @@ export class MemoryService {
     return this.identityStore;
   }
 
-  /**
-   * Check if long-term memory (Pinecone) is available
-   */
-  hasLongTermMemory(): boolean {
-    return this.longTermStore !== null;
-  }
 }
 
 /**

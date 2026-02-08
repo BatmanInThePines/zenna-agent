@@ -93,6 +93,10 @@ export interface UserSettings {
         write: boolean;
         create: boolean;
       };
+      notionMode?: 'query' | 'sync';   // Default: 'query' — live search vs synced to memory
+      syncedPageIds?: string[];         // IDs of pages currently synced to memory
+      syncedAt?: number;               // Unix ms of last sync
+      syncEstimateMB?: number;          // Actual size of synced content in MB
     };
     notebooklm?: { enabled: boolean };
   };

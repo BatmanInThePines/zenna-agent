@@ -586,6 +586,72 @@ export class QdrantLongTermStore implements LongTermMemoryStore {
     return response.result.operation_id;
   }
 
+  /**
+   * Count the approximate number of vectors owned by a user.
+   * Used for memory quota estimation (~4KB per vector point).
+   */
+  async countUserVectors(userId: string): Promise<number> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    try {
+      const response = await this.qdrantRequest<{
+        result: { count: number };
+      }>(
+        `/collections/${this.config.collectionName}/points/count`,
+        'POST',
+        {
+          filter: {
+            must: [
+              {
+                key: 'userId',
+                match: { value: userId },
+              },
+            ],
+          },
+          exact: false, // Approximate count is fine for quota display
+        }
+      );
+
+      return response.result.count;
+    } catch (error) {
+      console.error('[QdrantStore] Failed to count user vectors:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Delete all vectors for a user that have a specific tag.
+   * Used to clear notion-sync tagged memories when switching modes.
+   */
+  async deleteByTag(userId: string, tag: string): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    await this.qdrantRequest(
+      `/collections/${this.config.collectionName}/points/delete`,
+      'POST',
+      {
+        filter: {
+          must: [
+            {
+              key: 'userId',
+              match: { value: userId },
+            },
+            {
+              key: 'tags',
+              match: { value: tag },
+            },
+          ],
+        },
+      }
+    );
+
+    console.log(`[QdrantStore] Deleted vectors with tag '${tag}' for user ${userId}`);
+  }
+
   private pointToMemoryEntry(point: {
     id: string;
     payload: Record<string, unknown>;

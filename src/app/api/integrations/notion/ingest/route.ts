@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { SupabaseIdentityStore } from '@/core/providers/identity/supabase-identity';
-import {
-  PineconeLongTermStore,
-  OpenAIEmbeddingProvider,
-  GeminiEmbeddingProvider,
-} from '@/core/providers/memory/pinecone-store';
+import { createMemoryService } from '@/core/services/memory-service';
+import { NotionService } from '@/core/services/notion-service';
+import { getMemoryLimit } from '@/lib/utils/permissions';
 
 function getIdentityStore() {
   return new SupabaseIdentityStore({
@@ -24,7 +22,7 @@ const ingestionProgress = new Map<string, {
   error?: string;
 }>();
 
-// Start ingestion process
+// Start sync process (Notion → Qdrant via MemoryService)
 export async function POST(request: NextRequest) {
   try {
     const session = await auth();
@@ -39,7 +37,7 @@ export async function POST(request: NextRequest) {
     const { pageIds } = await request.json();
 
     if (!pageIds || !Array.isArray(pageIds) || pageIds.length === 0) {
-      return NextResponse.json({ error: 'No pages selected for ingestion' }, { status: 400 });
+      return NextResponse.json({ error: 'No pages selected for sync' }, { status: 400 });
     }
 
     // Get user's Notion credentials
@@ -54,9 +52,31 @@ export async function POST(request: NextRequest) {
     const existingProgress = ingestionProgress.get(userId);
     if (existingProgress?.status === 'processing') {
       return NextResponse.json({
-        message: 'Ingestion already in progress',
+        message: 'Sync already in progress',
         progress: existingProgress,
       });
+    }
+
+    // Memory quota check
+    const memoryService = createMemoryService();
+    await memoryService.initialize();
+
+    if (!memoryService.hasLongTermMemory()) {
+      return NextResponse.json(
+        { error: 'Vector memory not configured. Contact support.' },
+        { status: 500 }
+      );
+    }
+
+    const currentUsageMB = await memoryService.estimateUserMemoryUsageMB(userId);
+    const estimatedNewMB = pageIds.length * 0.05; // ~50KB per page average
+    const tier = session.user.subscription?.tier || 'trial';
+    const limitMB = getMemoryLimit(tier);
+
+    if (limitMB !== -1 && (currentUsageMB + estimatedNewMB) > limitMB) {
+      return NextResponse.json({
+        error: `Sync would exceed your memory quota. Currently using ${currentUsageMB.toFixed(1)} MB of ${limitMB} MB. Estimated sync size: ~${estimatedNewMB.toFixed(1)} MB. Upgrade your plan for more storage.`,
+      }, { status: 400 });
     }
 
     // Initialize progress
@@ -75,6 +95,8 @@ export async function POST(request: NextRequest) {
           ...notionConfig,
           ingestionStatus: 'processing',
           ingestionProgress: 0,
+          notionMode: 'sync',
+          syncedPageIds: pageIds,
         },
       },
     });
@@ -83,19 +105,19 @@ export async function POST(request: NextRequest) {
     processNotionPages(userId, pageIds, notionConfig.token).catch(console.error);
 
     return NextResponse.json({
-      message: 'Ingestion started',
+      message: 'Sync started',
       totalPages: pageIds.length,
     });
   } catch (error) {
-    console.error('Notion ingestion start error:', error);
+    console.error('Notion sync start error:', error);
     return NextResponse.json(
-      { error: 'Failed to start ingestion' },
+      { error: 'Failed to start sync' },
       { status: 500 }
     );
   }
 }
 
-// Get ingestion progress
+// Get sync progress
 export async function GET() {
   try {
     const session = await auth();
@@ -130,58 +152,78 @@ export async function GET() {
   }
 }
 
-// Background processing function
+// Clear synced Notion data from memory
+export async function DELETE() {
+  try {
+    const session = await auth();
+
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const userId = session.user.id;
+
+    // Clear all notion-sync tagged vectors
+    const memoryService = createMemoryService();
+    await memoryService.initialize();
+    await memoryService.clearNotionSync(userId);
+
+    // Reset settings
+    const identityStore = getIdentityStore();
+    const user = await identityStore.getUser(userId);
+    if (user) {
+      await identityStore.updateSettings(userId, {
+        externalContext: {
+          ...user.settings.externalContext,
+          notion: {
+            ...user.settings.externalContext?.notion,
+            enabled: user.settings.externalContext?.notion?.enabled ?? true,
+            syncedPageIds: [],
+            syncEstimateMB: 0,
+            ingestionStatus: 'idle',
+            ingestionProgress: 0,
+          },
+        },
+      });
+    }
+
+    return NextResponse.json({ success: true, message: 'Synced Notion data cleared from memory' });
+  } catch (error) {
+    console.error('Notion sync clear error:', error);
+    return NextResponse.json(
+      { error: 'Failed to clear synced data' },
+      { status: 500 }
+    );
+  }
+}
+
+// Background processing function — uses MemoryService (Qdrant) instead of Pinecone
 async function processNotionPages(userId: string, pageIds: string[], notionToken: string) {
-  // Initialize embedding provider
-  const embeddingApiKey = process.env.OPENAI_API_KEY || process.env.GOOGLE_AI_API_KEY;
-  if (!embeddingApiKey) {
-    await updateProgress(userId, 'error', 0, 'No embedding API key configured');
+  const memoryService = createMemoryService();
+  await memoryService.initialize();
+
+  if (!memoryService.hasLongTermMemory()) {
+    await updateProgress(userId, 'error', 0, 'Vector memory not configured');
     return;
   }
 
-  const embeddingProvider = process.env.OPENAI_API_KEY
-    ? new OpenAIEmbeddingProvider(process.env.OPENAI_API_KEY)
-    : new GeminiEmbeddingProvider(process.env.GOOGLE_AI_API_KEY!);
+  // Clear any previously synced Notion data before re-syncing
+  await memoryService.clearNotionSync(userId);
 
-  // Initialize Pinecone store
-  if (!process.env.PINECONE_API_KEY || !process.env.PINECONE_INDEX_NAME) {
-    await updateProgress(userId, 'error', 0, 'Pinecone not configured');
-    return;
-  }
-
-  const pineconeStore = new PineconeLongTermStore(
-    {
-      apiKey: process.env.PINECONE_API_KEY,
-      indexName: process.env.PINECONE_INDEX_NAME,
-    },
-    embeddingProvider
-  );
-
-  await pineconeStore.initialize();
-
+  const notionService = new NotionService(notionToken);
   let processedCount = 0;
 
   for (const pageId of pageIds) {
     try {
-      // Fetch page content from Notion
-      const pageContent = await fetchNotionPageContent(pageId, notionToken);
+      // Fetch page content using the existing NotionService (reuse, not duplicate)
+      const pageContent = await notionService.getPageContent(pageId);
 
-      if (pageContent) {
-        // Chunk the content if it's too long
-        const chunks = chunkText(pageContent.text, 1000);
+      if (pageContent && pageContent.content) {
+        // Chunk the content for embedding
+        const chunks = chunkText(pageContent.content, 1000);
 
         for (const chunk of chunks) {
-          // Store each chunk in Pinecone
-          await pineconeStore.store({
-            userId,
-            content: chunk,
-            metadata: {
-              type: 'fact',
-              source: 'external',
-              topic: pageContent.title,
-              tags: ['notion', 'knowledge-base'],
-            },
-          });
+          await memoryService.storeNotionSync(userId, chunk, pageContent.title, pageId);
         }
       }
 
@@ -193,6 +235,30 @@ async function processNotionPages(userId: string, pageIds: string[], notionToken
       console.error(`Error processing page ${pageId}:`, error);
       // Continue with other pages even if one fails
     }
+  }
+
+  // Calculate actual storage used after sync
+  const actualUsageMB = await memoryService.estimateUserMemoryUsageMB(userId);
+
+  // Update settings with actual sync data
+  try {
+    const identityStore = getIdentityStore();
+    const user = await identityStore.getUser(userId);
+    if (user) {
+      await identityStore.updateSettings(userId, {
+        externalContext: {
+          ...user.settings.externalContext,
+          notion: {
+            ...user.settings.externalContext?.notion,
+            enabled: user.settings.externalContext?.notion?.enabled ?? true,
+            syncedAt: Date.now(),
+            syncEstimateMB: actualUsageMB,
+          },
+        },
+      });
+    }
+  } catch (e) {
+    console.error('Failed to persist sync metadata:', e);
   }
 
   // Mark as completed
@@ -235,90 +301,8 @@ async function updateProgress(
       });
     }
   } catch (e) {
-    console.error('Failed to persist ingestion status:', e);
+    console.error('Failed to persist sync status:', e);
   }
-}
-
-// Fetch content from a Notion page
-async function fetchNotionPageContent(
-  pageId: string,
-  token: string
-): Promise<{ title: string; text: string } | null> {
-  try {
-    // Get page info
-    const pageResponse = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Notion-Version': '2022-06-28',
-      },
-    });
-
-    if (!pageResponse.ok) {
-      console.error(`Failed to fetch page ${pageId}:`, await pageResponse.text());
-      return null;
-    }
-
-    const pageData = await pageResponse.json();
-    const title = extractPageTitle(pageData);
-
-    // Get page blocks (content)
-    const blocksResponse = await fetch(
-      `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Notion-Version': '2022-06-28',
-        },
-      }
-    );
-
-    if (!blocksResponse.ok) {
-      console.error(`Failed to fetch blocks for ${pageId}:`, await blocksResponse.text());
-      return null;
-    }
-
-    const blocksData = await blocksResponse.json();
-    const text = extractTextFromBlocks(blocksData.results);
-
-    return { title, text };
-  } catch (error) {
-    console.error(`Error fetching Notion page ${pageId}:`, error);
-    return null;
-  }
-}
-
-// Extract title from Notion page
-function extractPageTitle(page: NotionPageData): string {
-  const properties = page.properties;
-  for (const key of Object.keys(properties)) {
-    const prop = properties[key];
-    if (prop.type === 'title' && prop.title?.[0]?.plain_text) {
-      return prop.title[0].plain_text;
-    }
-  }
-  return 'Untitled';
-}
-
-// Extract text content from Notion blocks
-function extractTextFromBlocks(blocks: NotionBlock[]): string {
-  const textParts: string[] = [];
-
-  for (const block of blocks) {
-    const blockType = block.type;
-    const blockData = block[blockType as keyof NotionBlock];
-
-    if (blockData && typeof blockData === 'object' && 'rich_text' in blockData) {
-      const richText = blockData.rich_text as Array<{ plain_text: string }>;
-      if (richText) {
-        const text = richText.map((t) => t.plain_text).join('');
-        if (text.trim()) {
-          textParts.push(text);
-        }
-      }
-    }
-  }
-
-  return textParts.join('\n\n');
 }
 
 // Chunk text into smaller pieces for embedding
@@ -359,17 +343,4 @@ function chunkText(text: string, maxChunkSize: number): string[] {
   }
 
   return chunks;
-}
-
-// Type definitions for Notion API responses
-interface NotionPageData {
-  properties: Record<string, {
-    type: string;
-    title?: Array<{ plain_text: string }>;
-  }>;
-}
-
-interface NotionBlock {
-  type: string;
-  [key: string]: unknown;
 }

@@ -36,6 +36,10 @@ interface UserSettings {
         write: boolean;
         create: boolean;
       };
+      notionMode?: 'query' | 'sync';
+      syncedPageIds?: string[];
+      syncedAt?: number;
+      syncEstimateMB?: number;
     };
   };
 }
@@ -149,6 +153,12 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
   const [selectedNotionPages, setSelectedNotionPages] = useState<Set<string>>(new Set());
   const [isLoadingNotionPages, setIsLoadingNotionPages] = useState(false);
   const [isIngesting, setIsIngesting] = useState(false);
+  const [isClearingSync, setIsClearingSync] = useState(false);
+  // Notion access mode: query (live search) or sync (copy to memory)
+  const [notionMode, setNotionMode] = useState<'query' | 'sync'>('query');
+  // Memory usage for sync mode quota display
+  const [memoryUsage, setMemoryUsage] = useState<{ usageMB: number; limitMB: number; tier: string } | null>(null);
+  const [isLoadingUsage, setIsLoadingUsage] = useState(false);
   // Capability selection (pre-auth UI)
   const [notionCapabilities, setNotionCapabilities] = useState({
     read: true,
@@ -245,6 +255,8 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
         // Check if Notion is connected
         if (settingsData.settings?.externalContext?.notion?.token) {
           setNotionStatus('connected');
+          // Initialize mode from saved settings
+          setNotionMode(settingsData.settings.externalContext.notion.notionMode || 'query');
           // Load available pages
           loadNotionPages();
         }
@@ -406,6 +418,67 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
       setIsLoadingNotionPages(false);
     }
   }, []);
+
+  // Fetch memory usage for quota display in sync mode
+  const fetchMemoryUsage = useCallback(async () => {
+    setIsLoadingUsage(true);
+    try {
+      const response = await fetch('/api/integrations/notion/memory-usage');
+      if (response.ok) {
+        const data = await response.json();
+        setMemoryUsage(data);
+      }
+    } catch {
+      // Ignore — usage display is advisory
+    } finally {
+      setIsLoadingUsage(false);
+    }
+  }, []);
+
+  // Handle Notion mode change
+  const handleNotionModeChange = useCallback(async (mode: 'query' | 'sync') => {
+    setNotionMode(mode);
+    if (mode === 'sync') {
+      fetchMemoryUsage();
+    }
+    // Persist mode to settings
+    try {
+      await saveSettings({
+        externalContext: {
+          ...settings.externalContext,
+          notion: {
+            ...settings.externalContext?.notion,
+            enabled: settings.externalContext?.notion?.enabled ?? true,
+            notionMode: mode,
+          },
+        },
+      });
+    } catch {
+      // Non-critical — mode save failed
+    }
+  }, [fetchMemoryUsage, settings, saveSettings]);
+
+  // Clear synced Notion data from memory
+  const clearNotionSync = useCallback(async () => {
+    setIsClearingSync(true);
+    try {
+      const response = await fetch('/api/integrations/notion/ingest', {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'Synced Notion data cleared from memory' });
+        setNotionMode('query');
+        fetchMemoryUsage();
+      } else {
+        const data = await response.json();
+        setMessage({ type: 'error', text: data.error || 'Failed to clear synced data' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to clear synced data' });
+    } finally {
+      setIsClearingSync(false);
+    }
+  }, [fetchMemoryUsage]);
 
   // Connect to Notion via popup window
   const connectNotion = useCallback(async () => {
@@ -1103,71 +1176,197 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                       </div>
                     </div>
 
-                    {/* Page Selection for Ingestion */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs text-zenna-muted">Knowledge base pages:</p>
-                        <button
-                          onClick={loadNotionPages}
-                          disabled={isLoadingNotionPages}
-                          className="text-xs text-zenna-accent hover:underline flex items-center gap-1"
-                        >
-                          {isLoadingNotionPages ? <span className="spinner-sm" /> : null}
-                          Refresh
-                        </button>
-                      </div>
+                    {/* Mode Selector */}
+                    <div className="space-y-3">
+                      <p className="text-xs text-zenna-muted font-medium uppercase tracking-wider">How Zenna accesses your Notion</p>
 
-                      {notionPages.length > 0 ? (
-                        <div className="max-h-48 overflow-y-auto space-y-1 border border-zenna-border rounded-lg p-2">
-                          {notionPages.map((page) => (
-                            <label
-                              key={page.id}
-                              className="flex items-center gap-2 p-2 hover:bg-zenna-surface rounded cursor-pointer"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selectedNotionPages.has(page.id)}
-                                onChange={() => togglePageSelection(page.id)}
-                                className="w-4 h-4 rounded border-zenna-border bg-zenna-bg text-zenna-accent focus:ring-zenna-accent"
-                              />
-                              <span className="text-sm truncate">{page.title}</span>
-                            </label>
-                          ))}
+                      {/* Query on Demand */}
+                      <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                        notionMode === 'query'
+                          ? 'border-zenna-accent/50 bg-zenna-accent/5'
+                          : 'border-zenna-border hover:border-zenna-border/80 hover:bg-white/5'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="notionMode"
+                          checked={notionMode === 'query'}
+                          onChange={() => handleNotionModeChange('query')}
+                          className="mt-0.5 w-4 h-4 text-zenna-accent border-zenna-border bg-zenna-bg focus:ring-zenna-accent"
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-white">Query on Demand</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zenna-accent/20 text-zenna-accent font-medium">Recommended</span>
+                          </div>
+                          <p className="text-xs text-zenna-muted mt-1">
+                            Zenna searches your Notion live when you ask. Always up-to-date. No storage used.
+                          </p>
+                          {notionMode === 'query' && (
+                            <p className="text-xs text-green-400 mt-2 flex items-center gap-1">
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                              Active — just ask Zenna about your Notion content
+                            </p>
+                          )}
                         </div>
-                      ) : (
-                        <p className="text-xs text-zenna-muted italic">
-                          No pages found. Grant access to pages in your Notion settings.
-                        </p>
-                      )}
+                      </label>
+
+                      {/* Sync to Memory */}
+                      <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                        notionMode === 'sync'
+                          ? 'border-zenna-accent/50 bg-zenna-accent/5'
+                          : 'border-zenna-border hover:border-zenna-border/80 hover:bg-white/5'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="notionMode"
+                          checked={notionMode === 'sync'}
+                          onChange={() => handleNotionModeChange('sync')}
+                          className="mt-0.5 w-4 h-4 text-zenna-accent border-zenna-border bg-zenna-bg focus:ring-zenna-accent"
+                        />
+                        <div className="flex-1">
+                          <span className="text-sm font-medium text-white">Sync to Memory</span>
+                          <p className="text-xs text-zenna-muted mt-1">
+                            Copy selected pages into Zenna&apos;s memory for faster offline access. Uses memory credits.
+                          </p>
+                        </div>
+                      </label>
                     </div>
 
-                    {/* Actions */}
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={startIngestion}
-                        disabled={isIngesting || selectedNotionPages.size === 0}
-                        className="btn-primary text-sm flex items-center gap-2"
-                      >
-                        {isIngesting ? (
-                          <>
-                            <span className="spinner-sm" />
-                            Ingesting...
-                          </>
-                        ) : (
-                          <>
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                            </svg>
-                            Ingest {selectedNotionPages.size > 0 ? `(${selectedNotionPages.size})` : ''}
-                          </>
-                        )}
-                      </button>
+                    {/* Sync Mode Details (only shown when sync selected) */}
+                    {notionMode === 'sync' && (
+                      <div className="space-y-3 pl-1">
+                        {/* Memory Quota Bar */}
+                        <div className="bg-zenna-surface/50 rounded-lg p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-zenna-muted font-medium">Memory Usage</p>
+                            {isLoadingUsage ? (
+                              <span className="spinner-sm" />
+                            ) : memoryUsage ? (
+                              <p className="text-xs text-zenna-muted">
+                                {memoryUsage.limitMB === -1
+                                  ? `${memoryUsage.usageMB} MB used (Unlimited)`
+                                  : `${memoryUsage.usageMB} MB of ${memoryUsage.limitMB} MB`
+                                }
+                              </p>
+                            ) : null}
+                          </div>
+                          {memoryUsage && memoryUsage.limitMB !== -1 && (
+                            <div className="w-full bg-zenna-bg rounded-full h-2">
+                              <div
+                                className={`h-2 rounded-full transition-all ${
+                                  memoryUsage.usageMB / memoryUsage.limitMB > 0.9
+                                    ? 'bg-red-500'
+                                    : memoryUsage.usageMB / memoryUsage.limitMB > 0.7
+                                      ? 'bg-amber-500'
+                                      : 'bg-zenna-accent'
+                                }`}
+                                style={{ width: `${Math.min((memoryUsage.usageMB / memoryUsage.limitMB) * 100, 100)}%` }}
+                              />
+                            </div>
+                          )}
+                          {selectedNotionPages.size > 0 && (
+                            <p className="text-xs text-zenna-muted">
+                              Estimated sync size: ~{(selectedNotionPages.size * 0.05).toFixed(1)} MB for {selectedNotionPages.size} page{selectedNotionPages.size !== 1 ? 's' : ''}
+                            </p>
+                          )}
+                          {memoryUsage && memoryUsage.limitMB !== -1 &&
+                            (memoryUsage.usageMB + selectedNotionPages.size * 0.05) > memoryUsage.limitMB && (
+                            <p className="text-xs text-red-400 flex items-center gap-1">
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                              </svg>
+                              Sync may exceed your memory quota. Consider upgrading your plan.
+                            </p>
+                          )}
+                        </div>
 
+                        {/* Page Selection */}
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs text-zenna-muted">Select pages to sync:</p>
+                            <button
+                              onClick={loadNotionPages}
+                              disabled={isLoadingNotionPages}
+                              className="text-xs text-zenna-accent hover:underline flex items-center gap-1"
+                            >
+                              {isLoadingNotionPages ? <span className="spinner-sm" /> : null}
+                              Refresh
+                            </button>
+                          </div>
+
+                          {notionPages.length > 0 ? (
+                            <div className="max-h-48 overflow-y-auto space-y-1 border border-zenna-border rounded-lg p-2">
+                              {notionPages.map((page) => (
+                                <label
+                                  key={page.id}
+                                  className="flex items-center gap-2 p-2 hover:bg-zenna-surface rounded cursor-pointer"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedNotionPages.has(page.id)}
+                                    onChange={() => togglePageSelection(page.id)}
+                                    className="w-4 h-4 rounded border-zenna-border bg-zenna-bg text-zenna-accent focus:ring-zenna-accent"
+                                  />
+                                  <span className="text-sm truncate">{page.title}</span>
+                                </label>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-zenna-muted italic">
+                              No pages found. Grant access to pages in your Notion settings.
+                            </p>
+                          )}
+                        </div>
+
+                        <p className="text-xs text-zenna-muted/70 italic">
+                          Syncing will replace any previously synced content.
+                        </p>
+
+                        {/* Sync Actions */}
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={startIngestion}
+                            disabled={isIngesting || selectedNotionPages.size === 0}
+                            className="btn-primary text-sm flex items-center gap-2"
+                          >
+                            {isIngesting ? (
+                              <>
+                                <span className="spinner-sm" />
+                                Syncing...
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Sync to Memory {selectedNotionPages.size > 0 ? `(${selectedNotionPages.size})` : ''}
+                              </>
+                            )}
+                          </button>
+
+                          {settings.externalContext?.notion?.syncedPageIds?.length ? (
+                            <button
+                              onClick={clearNotionSync}
+                              disabled={isClearingSync}
+                              className="text-red-400 text-xs hover:underline flex items-center gap-1"
+                            >
+                              {isClearingSync ? <span className="spinner-sm" /> : null}
+                              Clear Synced Data
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Disconnect */}
+                    <div className="pt-2 border-t border-zenna-border/30">
                       <button
                         onClick={disconnectNotion}
-                        className="text-red-400 text-xs hover:underline ml-auto"
+                        className="text-red-400 text-xs hover:underline"
                       >
-                        Disconnect
+                        Disconnect Notion
                       </button>
                     </div>
                   </div>
