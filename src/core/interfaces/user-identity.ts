@@ -88,6 +88,11 @@ export interface UserSettings {
       ingestionStatus?: 'idle' | 'processing' | 'completed' | 'error';
       ingestionProgress?: number;
       lastCheckedAt?: number; // Unix ms timestamp of last delta check
+      capabilities?: {
+        read: boolean;
+        write: boolean;
+        create: boolean;
+      };
     };
     notebooklm?: { enabled: boolean };
   };

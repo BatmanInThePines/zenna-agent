@@ -171,6 +171,26 @@ export const INTEGRATION_MANIFESTS: Record<string, IntegrationManifest> = {
           'Read me my weekly review notes',
         ],
       },
+      {
+        id: 'task-management',
+        name: 'Task & Backlog Management',
+        description: 'Add tasks, bugs, and items to Notion databases',
+        examples: [
+          'Add this bug to the sprint backlog',
+          'Create a feature request in my roadmap',
+          'Log this as a backlog item',
+        ],
+      },
+      {
+        id: 'page-creation',
+        name: 'Page & Knowledge Creation',
+        description: 'Create new pages and document conversations in Notion',
+        examples: [
+          'Document this discussion in Notion',
+          'Create meeting notes from our conversation',
+          'Add a page about the product idea we discussed',
+        ],
+      },
     ],
     schedulableActions: [],
   },

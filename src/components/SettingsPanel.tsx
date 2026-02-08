@@ -31,6 +31,11 @@ interface UserSettings {
       workspaceName?: string;
       ingestionStatus?: 'idle' | 'processing' | 'completed' | 'error';
       ingestionProgress?: number;
+      capabilities?: {
+        read: boolean;
+        write: boolean;
+        create: boolean;
+      };
     };
   };
 }
@@ -144,6 +149,12 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
   const [selectedNotionPages, setSelectedNotionPages] = useState<Set<string>>(new Set());
   const [isLoadingNotionPages, setIsLoadingNotionPages] = useState(false);
   const [isIngesting, setIsIngesting] = useState(false);
+  // Capability selection (pre-auth UI)
+  const [notionCapabilities, setNotionCapabilities] = useState({
+    read: true,
+    write: true,
+    create: true,
+  });
 
   // Avatar upload refs
   const masterAvatarInputRef = useRef<HTMLInputElement>(null);
@@ -396,7 +407,7 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
     }
   }, []);
 
-  // Connect to Notion
+  // Connect to Notion via popup window
   const connectNotion = useCallback(async () => {
     setNotionStatus('connecting');
 
@@ -408,7 +419,61 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
       const data = await response.json();
 
       if (data.authUrl) {
-        window.location.href = data.authUrl;
+        // Open Notion OAuth in a centered popup window
+        const width = 600;
+        const height = 700;
+        const left = window.screenX + (window.outerWidth - width) / 2;
+        const top = window.screenY + (window.outerHeight - height) / 2;
+
+        const popup = window.open(
+          data.authUrl,
+          'notion-oauth',
+          `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
+        );
+
+        // Listen for the popup to complete OAuth and send a message back
+        const handleMessage = async (event: MessageEvent) => {
+          if (event.data?.type === 'notion-oauth-complete') {
+            window.removeEventListener('message', handleMessage);
+            if (event.data.success) {
+              // Save the user-selected capabilities to settings
+              try {
+                await saveSettings({
+                  externalContext: {
+                    ...settings.externalContext,
+                    notion: {
+                      ...settings.externalContext?.notion,
+                      enabled: true,
+                      capabilities: { ...notionCapabilities },
+                    },
+                  },
+                });
+              } catch {
+                // Capabilities save failed but OAuth succeeded — continue
+              }
+              setNotionStatus('connected');
+              loadNotionPages();
+              setMessage({ type: 'success', text: 'Notion connected successfully!' });
+            } else {
+              setNotionStatus('disconnected');
+              setMessage({ type: 'error', text: event.data.error || 'Notion connection failed' });
+            }
+          }
+        };
+        window.addEventListener('message', handleMessage);
+
+        // Also poll for popup closed without completing OAuth
+        const pollTimer = setInterval(() => {
+          if (popup && popup.closed) {
+            clearInterval(pollTimer);
+            // Give a brief delay for the message event to fire
+            setTimeout(() => {
+              window.removeEventListener('message', handleMessage);
+              // If still 'connecting', the user closed the popup without completing
+              setNotionStatus((prev) => prev === 'connecting' ? 'disconnected' : prev);
+            }, 500);
+          }
+        }, 500);
       } else if (data.error) {
         setNotionStatus('disconnected');
         setMessage({ type: 'error', text: data.error });
@@ -417,7 +482,7 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
       setNotionStatus('disconnected');
       setMessage({ type: 'error', text: 'Failed to initiate Notion connection' });
     }
-  }, []);
+  }, [loadNotionPages]);
 
   // Disconnect from Notion
   const disconnectNotion = useCallback(async () => {
@@ -988,43 +1053,68 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                 )}
               </div>
 
-              {/* Notion Knowledge Base */}
+              {/* Notion Integration */}
               <div className="glass-card p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-medium flex items-center">
-                    Notion Knowledge Base
-                    <InfoTooltip
-                      title="Notion Integration"
-                      description="Connect your Notion workspace to give Zenna access to your notes and documents as a knowledge base."
-                      howTo="Click Connect, authorize access, then select which pages to ingest."
-                    />
+                  <h3 className="text-sm font-medium flex items-center gap-2">
+                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
+                      <path d="M4 4h16v16H4V4z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M8 8h2v8H8V8zM14 8h2v8h-2V8z" fill="currentColor" opacity="0.6"/>
+                    </svg>
+                    Notion
                   </h3>
                   <span className={`text-xs px-2 py-1 rounded-full ${
                     notionStatus === 'connected'
-                      ? 'bg-green-500/20 text-green-400'
+                      ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                       : 'bg-zenna-surface text-zenna-muted'
                   }`}>
-                    {notionStatus === 'connected' ? 'Connected' : 'Not Connected'}
+                    {notionStatus === 'connected' ? 'Paired' : 'Not Connected'}
                   </span>
                 </div>
 
                 {notionStatus === 'connected' ? (
+                  /* ===== CONNECTED STATE ===== */
                   <div className="space-y-4">
-                    <div className="flex items-center gap-2 text-sm text-zenna-muted">
-                      <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    <div className="flex items-center gap-2 text-sm">
+                      <svg className="w-4 h-4 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                       </svg>
-                      Connected to Notion
-                      {settings.externalContext?.notion?.workspaceName && (
-                        <span className="text-zenna-accent">({settings.externalContext.notion.workspaceName})</span>
-                      )}
+                      <span className="text-zenna-muted">
+                        Paired with{' '}
+                        <span className="text-zenna-accent font-medium">
+                          {settings.externalContext?.notion?.workspaceName || 'Notion'}
+                        </span>
+                      </span>
                     </div>
 
-                    {/* Page Selection */}
+                    {/* Active Capabilities */}
+                    <div className="bg-zenna-surface/50 rounded-lg p-3 space-y-2">
+                      <p className="text-xs text-zenna-muted font-medium uppercase tracking-wider">Active Capabilities</p>
+                      <div className="flex flex-wrap gap-2">
+                        {(settings.externalContext?.notion?.capabilities?.read !== false) && (
+                          <span className="text-xs px-2 py-1 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20">Read</span>
+                        )}
+                        {(settings.externalContext?.notion?.capabilities?.write !== false) && (
+                          <span className="text-xs px-2 py-1 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20">Write</span>
+                        )}
+                        {(settings.externalContext?.notion?.capabilities?.create !== false) && (
+                          <span className="text-xs px-2 py-1 rounded bg-green-500/15 text-green-400 border border-green-500/20">Create</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Page Selection for Ingestion */}
                     <div>
                       <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs text-zenna-muted">Select pages to add to knowledge base:</p>
-                        {isLoadingNotionPages && <span className="spinner-sm" />}
+                        <p className="text-xs text-zenna-muted">Knowledge base pages:</p>
+                        <button
+                          onClick={loadNotionPages}
+                          disabled={isLoadingNotionPages}
+                          className="text-xs text-zenna-accent hover:underline flex items-center gap-1"
+                        >
+                          {isLoadingNotionPages ? <span className="spinner-sm" /> : null}
+                          Refresh
+                        </button>
                       </div>
 
                       {notionPages.length > 0 ? (
@@ -1046,7 +1136,7 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                         </div>
                       ) : (
                         <p className="text-xs text-zenna-muted italic">
-                          No pages found. Make sure you granted access to pages in Notion.
+                          No pages found. Grant access to pages in your Notion settings.
                         </p>
                       )}
                     </div>
@@ -1061,7 +1151,7 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                         {isIngesting ? (
                           <>
                             <span className="spinner-sm" />
-                            Starting...
+                            Ingesting...
                           </>
                         ) : (
                           <>
@@ -1074,49 +1164,104 @@ export default function SettingsPanel({ onClose, initialTab, onOpenAvatarSetting
                       </button>
 
                       <button
-                        onClick={loadNotionPages}
-                        disabled={isLoadingNotionPages}
-                        className="btn-secondary text-sm"
-                      >
-                        Refresh Pages
-                      </button>
-
-                      <button
                         onClick={disconnectNotion}
                         className="text-red-400 text-xs hover:underline ml-auto"
                       >
                         Disconnect
                       </button>
                     </div>
-
-                    <p className="text-xs text-zenna-muted">
-                      Ingestion runs in the background. A progress indicator will appear at the top of the screen.
-                    </p>
                   </div>
                 ) : (
-                  <div>
-                    <p className="text-xs text-zenna-muted mb-3">
-                      Connect your Notion workspace to give Zenna access to your notes and documents. Selected pages will be vectorized and stored for RAG retrieval.
+                  /* ===== NOT CONNECTED STATE — Capability Selection + Authorize ===== */
+                  <div className="space-y-4">
+                    <p className="text-xs text-zenna-muted">
+                      Connect your Notion workspace so Zenna can read your notes, update pages, and create new content on your behalf.
                     </p>
-                    <button
-                      onClick={connectNotion}
-                      disabled={notionStatus === 'connecting'}
-                      className="btn-secondary text-sm flex items-center gap-2"
-                    >
-                      {notionStatus === 'connecting' ? (
-                        <>
-                          <span className="spinner-sm" />
-                          Redirecting...
-                        </>
-                      ) : (
-                        <>
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                          </svg>
-                          Connect Notion
-                        </>
-                      )}
-                    </button>
+
+                    {/* Capability Selection */}
+                    <div className="bg-zenna-surface/50 rounded-lg p-3 space-y-3">
+                      <p className="text-xs text-zenna-muted font-medium uppercase tracking-wider">
+                        What can Zenna do with your Notion?
+                      </p>
+                      <p className="text-xs text-zenna-muted/70">
+                        We recommend enabling all capabilities for the best experience.
+                      </p>
+
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 cursor-pointer transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={notionCapabilities.read}
+                            onChange={(e) => setNotionCapabilities(prev => ({ ...prev, read: e.target.checked }))}
+                            className="w-4 h-4 rounded border-zenna-border bg-zenna-bg text-zenna-accent focus:ring-zenna-accent"
+                          />
+                          <div>
+                            <span className="text-sm font-medium text-white">Read</span>
+                            <p className="text-xs text-zenna-muted">Search, read pages, and use your Notion as a knowledge base</p>
+                          </div>
+                        </label>
+
+                        <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 cursor-pointer transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={notionCapabilities.write}
+                            onChange={(e) => setNotionCapabilities(prev => ({ ...prev, write: e.target.checked }))}
+                            className="w-4 h-4 rounded border-zenna-border bg-zenna-bg text-zenna-accent focus:ring-zenna-accent"
+                          />
+                          <div>
+                            <span className="text-sm font-medium text-white">Write</span>
+                            <p className="text-xs text-zenna-muted">Update existing pages, add entries to your databases</p>
+                          </div>
+                        </label>
+
+                        <label className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 cursor-pointer transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={notionCapabilities.create}
+                            onChange={(e) => setNotionCapabilities(prev => ({ ...prev, create: e.target.checked }))}
+                            className="w-4 h-4 rounded border-zenna-border bg-zenna-bg text-zenna-accent focus:ring-zenna-accent"
+                          />
+                          <div>
+                            <span className="text-sm font-medium text-white">Create</span>
+                            <p className="text-xs text-zenna-muted">Create new pages and documents in your workspace</p>
+                          </div>
+                        </label>
+                      </div>
+
+                      <button
+                        onClick={() => setNotionCapabilities({ read: true, write: true, create: true })}
+                        className="text-xs text-zenna-accent hover:underline"
+                      >
+                        Select All (Recommended)
+                      </button>
+                    </div>
+
+                    {/* Authorize / Cancel Buttons */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={connectNotion}
+                        disabled={notionStatus === 'connecting' || (!notionCapabilities.read && !notionCapabilities.write && !notionCapabilities.create)}
+                        className="btn-primary text-sm flex items-center gap-2 flex-1 justify-center"
+                      >
+                        {notionStatus === 'connecting' ? (
+                          <>
+                            <span className="spinner-sm" />
+                            Authorizing...
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                            </svg>
+                            Authorize Notion
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {(!notionCapabilities.read && !notionCapabilities.write && !notionCapabilities.create) && (
+                      <p className="text-xs text-red-400">Please select at least one capability to continue.</p>
+                    )}
                   </div>
                 )}
               </div>

@@ -34,6 +34,7 @@ export async function GET() {
     }
 
     // Fetch users with subscription and consumption data
+    // Include settings to check for integration pairings (Notion, Hue, etc.)
     const { data: users, error: usersError } = await supabase
       .from('users')
       .select(`
@@ -41,7 +42,8 @@ export async function GET() {
         email,
         role,
         created_at,
-        last_login_at
+        last_login_at,
+        settings
       `)
       .order('created_at', { ascending: false });
 
@@ -96,6 +98,16 @@ export async function GET() {
       const csatStats = csatMap.get(user.id);
       const consumption = consumptionMap.get(user.id) || { apiCalls: 0, tokensUsed: 0 };
 
+      // Extract integration pairing status from user settings (metadata only, never content)
+      const userSettings = (user.settings || {}) as Record<string, unknown>;
+      const externalContext = (userSettings.externalContext || {}) as Record<string, unknown>;
+      const notionConfig = (externalContext.notion || null) as {
+        enabled?: boolean;
+        workspaceName?: string;
+        connectedAt?: number;
+        capabilities?: { read?: boolean; write?: boolean; create?: boolean };
+      } | null;
+
       return {
         id: user.id,
         email: user.email,
@@ -111,6 +123,15 @@ export async function GET() {
         consumption,
         lastLoginAt: user.last_login_at,
         createdAt: user.created_at,
+        // Integration pairings — metadata only, never tokens or content
+        integrations: {
+          notion: notionConfig?.enabled ? {
+            paired: true,
+            workspaceName: notionConfig.workspaceName || null,
+            connectedAt: notionConfig.connectedAt || null,
+            capabilities: notionConfig.capabilities || { read: true, write: true, create: true },
+          } : { paired: false },
+        },
       };
     });
 

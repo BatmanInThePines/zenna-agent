@@ -9,6 +9,47 @@ function getIdentityStore() {
   });
 }
 
+/**
+ * Render an HTML page that sends a postMessage to the parent/opener window
+ * and closes the popup. Falls back to redirect if not in a popup.
+ */
+function popupResponse(success: boolean, error?: string): NextResponse {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const message = JSON.stringify({
+    type: 'notion-oauth-complete',
+    success,
+    error: error || null,
+  });
+
+  const html = `<!DOCTYPE html>
+<html>
+<head><title>Notion Connection</title></head>
+<body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #1a1a2e; color: #e0e0e0;">
+  <div style="text-align: center; padding: 2rem;">
+    <p>${success ? 'Notion connected successfully! This window will close.' : 'Connection failed: ' + (error || 'Unknown error')}</p>
+  </div>
+  <script>
+    try {
+      if (window.opener) {
+        window.opener.postMessage(${message}, '${appUrl}');
+        setTimeout(function() { window.close(); }, 500);
+      } else {
+        // Not a popup — redirect back to chat
+        window.location.href = '${appUrl}/chat?${success ? 'notion_connected=true' : 'notion_error=' + encodeURIComponent(error || 'unknown')}';
+      }
+    } catch (e) {
+      window.location.href = '${appUrl}/chat?${success ? 'notion_connected=true' : 'notion_error=' + encodeURIComponent(error || 'unknown')}';
+    }
+  </script>
+</body>
+</html>`;
+
+  return new NextResponse(html, {
+    status: 200,
+    headers: { 'Content-Type': 'text/html' },
+  });
+}
+
 // OAuth callback - exchanges authorization code for access token
 export async function GET(request: NextRequest) {
   try {
@@ -24,15 +65,11 @@ export async function GET(request: NextRequest) {
     // Handle OAuth errors
     if (error) {
       console.error('Notion OAuth error:', error);
-      return NextResponse.redirect(
-        new URL(`/chat?notion_error=${encodeURIComponent(error)}`, process.env.NEXT_PUBLIC_APP_URL!)
-      );
+      return popupResponse(false, error);
     }
 
     if (!code || !state) {
-      return NextResponse.redirect(
-        new URL('/chat?notion_error=missing_params', process.env.NEXT_PUBLIC_APP_URL!)
-      );
+      return popupResponse(false, 'Missing authorization parameters');
     }
 
     // Decode state to get userId
@@ -43,20 +80,14 @@ export async function GET(request: NextRequest) {
 
       // Check timestamp (state should be recent - within 10 minutes)
       if (Date.now() - decoded.timestamp > 10 * 60 * 1000) {
-        return NextResponse.redirect(
-          new URL('/chat?notion_error=expired_state', process.env.NEXT_PUBLIC_APP_URL!)
-        );
+        return popupResponse(false, 'Authorization expired. Please try again.');
       }
     } catch {
-      return NextResponse.redirect(
-        new URL('/chat?notion_error=invalid_state', process.env.NEXT_PUBLIC_APP_URL!)
-      );
+      return popupResponse(false, 'Invalid authorization state');
     }
 
     if (!NOTION_CLIENT_ID || !NOTION_CLIENT_SECRET) {
-      return NextResponse.redirect(
-        new URL('/chat?notion_error=not_configured', process.env.NEXT_PUBLIC_APP_URL!)
-      );
+      return popupResponse(false, 'Notion integration not configured');
     }
 
     // Exchange authorization code for tokens
@@ -76,9 +107,7 @@ export async function GET(request: NextRequest) {
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.error('Notion token exchange failed:', errorText);
-      return NextResponse.redirect(
-        new URL('/chat?notion_error=token_exchange_failed', process.env.NEXT_PUBLIC_APP_URL!)
-      );
+      return popupResponse(false, 'Token exchange failed. Please try again.');
     }
 
     const tokenData = await tokenResponse.json();
@@ -99,20 +128,16 @@ export async function GET(request: NextRequest) {
           workspaceName: tokenData.workspace_name,
           botId: tokenData.bot_id,
           connectedAt: Date.now(),
-          ingestionStatus: 'idle', // 'idle' | 'processing' | 'completed' | 'error'
+          ingestionStatus: 'idle',
           ingestionProgress: 0,
         },
       },
     });
 
-    // Redirect back to chat with success, opening settings to integrations tab
-    return NextResponse.redirect(
-      new URL('/chat?notion_connected=true&open_settings=integrations', process.env.NEXT_PUBLIC_APP_URL!)
-    );
+    // Send success to popup opener and close
+    return popupResponse(true);
   } catch (error) {
     console.error('Notion callback error:', error);
-    return NextResponse.redirect(
-      new URL('/chat?notion_error=callback_failed', process.env.NEXT_PUBLIC_APP_URL!)
-    );
+    return popupResponse(false, 'Connection failed. Please try again.');
   }
 }

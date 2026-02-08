@@ -21,6 +21,14 @@ export interface UserData {
   };
   lastLoginAt: string | null;
   createdAt: string;
+  integrations?: {
+    notion?: {
+      paired: boolean;
+      workspaceName?: string | null;
+      connectedAt?: number | null;
+      capabilities?: { read?: boolean; write?: boolean; create?: boolean };
+    };
+  };
 }
 
 interface UserTableProps {
@@ -151,6 +159,9 @@ export function UserTable({
               Status
             </th>
             <th className="text-left py-3 px-4 text-xs font-medium text-white/50 uppercase tracking-wider">
+              Integrations
+            </th>
+            <th className="text-left py-3 px-4 text-xs font-medium text-white/50 uppercase tracking-wider">
               CSAT
             </th>
             <th className="text-left py-3 px-4 text-xs font-medium text-white/50 uppercase tracking-wider">
@@ -202,6 +213,23 @@ export function UserTable({
                   {user.subscription ? getStatusBadge(user.subscription.status) : getStatusBadge('none')}
                 </td>
                 <td className="py-4 px-4">
+                  <div className="flex flex-wrap gap-1">
+                    {user.integrations?.notion?.paired ? (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-500/15 text-blue-400 border border-blue-500/20"
+                        title={`Notion: ${user.integrations.notion.workspaceName || 'Connected'}${user.integrations.notion.connectedAt ? ` (since ${new Date(user.integrations.notion.connectedAt).toLocaleDateString()})` : ''}`}
+                      >
+                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor" opacity="0.7">
+                          <rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/>
+                        </svg>
+                        Notion
+                      </span>
+                    ) : (
+                      <span className="text-xs text-white/30">None</span>
+                    )}
+                  </div>
+                </td>
+                <td className="py-4 px-4">
                   <CSATIndicator score={user.csatScore} showLabel={false} size="sm" />
                 </td>
                 <td className="py-4 px-4">
@@ -237,7 +265,7 @@ export function UserTable({
               {/* Expanded Actions Row */}
               {expandedUser === user.id && (
                 <tr className="bg-white/5">
-                  <td colSpan={7} className="py-4 px-4">
+                  <td colSpan={8} className="py-4 px-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         {/* Suspend/Unsuspend */}
