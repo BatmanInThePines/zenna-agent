@@ -9,7 +9,7 @@ function HomeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const error = searchParams.get('error');
-  const mode = searchParams.get('mode') as 'signin' | 'signup' | null;
+  // mode param removed — unified login flow
 
   const [isChecking, setIsChecking] = useState(true);
   const [showAuth, setShowAuth] = useState(false);
@@ -140,7 +140,7 @@ function HomeContent() {
         )}
 
         {/* Auth Form */}
-        <AuthForm initialMode={mode === 'signup' ? 'signup' : 'signin'} />
+        <AuthForm />
 
         {/* Footer */}
         <div className="mt-12 text-center space-y-2">
