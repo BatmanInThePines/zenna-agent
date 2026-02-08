@@ -44,6 +44,11 @@ function ChatPageContent() {
   const [pendingGreetingAudio, setPendingGreetingAudio] = useState<string | null>(null);
   const [showAudioPrompt, setShowAudioPrompt] = useState(false);
 
+  // Thinking progress state
+  const [thinkingStatus, setThinkingStatus] = useState<string>('');
+  const [thinkingElapsed, setThinkingElapsed] = useState(0);
+  const thinkingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   // Integration onboarding state
   const [newIntegration, setNewIntegration] = useState<string | null>(null);
   const [showEducationPrompt, setShowEducationPrompt] = useState(false);
@@ -78,6 +83,27 @@ function ChatPageContent() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const silenceStartRef = useRef<number>(0);
   const isSpeakingRef = useRef(false);
+
+  // Thinking elapsed timer — counts seconds while in thinking state
+  useEffect(() => {
+    if (zennaState === 'thinking') {
+      setThinkingElapsed(0);
+      setThinkingStatus('');
+      thinkingTimerRef.current = setInterval(() => {
+        setThinkingElapsed(prev => prev + 1);
+      }, 1000);
+    } else {
+      if (thinkingTimerRef.current) {
+        clearInterval(thinkingTimerRef.current);
+        thinkingTimerRef.current = null;
+      }
+      setThinkingElapsed(0);
+      setThinkingStatus('');
+    }
+    return () => {
+      if (thinkingTimerRef.current) clearInterval(thinkingTimerRef.current);
+    };
+  }, [zennaState]);
 
   // Check authentication and load settings
   useEffect(() => {
@@ -392,7 +418,7 @@ function ChatPageContent() {
     }
   }, []);
 
-  // Interrupt current speech/processing
+  // Interrupt current speech/processing/thinking
   const interruptSpeaking = useCallback(() => {
     // Stop audio playback
     if (currentAudioRef.current) {
@@ -407,8 +433,10 @@ function ChatPageContent() {
       abortControllerRef.current = null;
     }
 
-    // Clear streaming state
+    // Clear streaming and thinking state
     setStreamingResponse('');
+    setThinkingStatus('');
+    setThinkingElapsed(0);
     setZennaState('idle');
   }, []);
 
@@ -475,6 +503,12 @@ function ChatPageContent() {
               if (data.type === 'text') {
                 fullText += data.content;
                 setStreamingResponse(fullText);
+              } else if (data.type === 'status') {
+                // Tool execution status update
+                setThinkingStatus(data.content || `${data.action}: ${data.tool}`);
+              } else if (data.type === 'thinking') {
+                // Escalating thinking feedback from server
+                setThinkingStatus(data.content);
               } else if (data.type === 'complete') {
                 fullText = data.fullResponse;
                 emotion = data.emotion;
@@ -1310,9 +1344,12 @@ function ChatPageContent() {
             alwaysListening={alwaysListening}
             onMicClick={handleMicClick}
             onStopSpeaking={interruptSpeaking}
+            onInterrupt={interruptSpeaking}
             onToggleAlwaysListening={toggleAlwaysListening}
             currentTranscript={currentTranscript || streamingResponse}
             disabled={false}
+            thinkingStatus={thinkingStatus}
+            thinkingElapsed={thinkingElapsed}
           />
         </div>
 
@@ -1328,6 +1365,9 @@ function ChatPageContent() {
               <Transcript
                 messages={messages}
                 streamingResponse={streamingResponse}
+                zennaState={zennaState}
+                thinkingStatus={thinkingStatus}
+                thinkingElapsed={thinkingElapsed}
                 chatInput={
                   <ChatInput
                     onSubmit={handleTextSubmit}

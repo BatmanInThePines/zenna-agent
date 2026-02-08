@@ -8,9 +8,12 @@ interface VoiceControlsProps {
   alwaysListening: boolean;
   onMicClick: () => void;
   onStopSpeaking: () => void;
+  onInterrupt?: () => void;
   onToggleAlwaysListening: (enabled: boolean) => void;
   currentTranscript?: string;
   disabled?: boolean;
+  thinkingStatus?: string;
+  thinkingElapsed?: number;
 }
 
 // Smooth audio level history for waveform animation
@@ -32,9 +35,12 @@ export default function VoiceControls({
   alwaysListening,
   onMicClick,
   onStopSpeaking,
+  onInterrupt,
   onToggleAlwaysListening,
   currentTranscript,
   disabled = false,
+  thinkingStatus,
+  thinkingElapsed = 0,
 }: VoiceControlsProps) {
   const [showTooltip, setShowTooltip] = useState(false);
   const [levelHistory, setLevelHistory] = useState<number[]>(new Array(LEVEL_HISTORY_SIZE).fill(0));
@@ -108,27 +114,27 @@ export default function VoiceControls({
         {/* Microphone Button (shown when not speaking) */}
         {state !== 'speaking' && (
           <button
-            onClick={onMicClick}
-            disabled={disabled || state === 'thinking'}
+            onClick={state === 'thinking' ? onInterrupt : onMicClick}
+            disabled={disabled}
             className={`w-16 h-16 rounded-full flex items-center justify-center transition-all relative ${
               state === 'listening'
                 ? isActivelySpeaking
                   ? 'bg-green-500 hover:bg-green-600'
                   : 'bg-red-500 hover:bg-red-600 voice-pulse'
                 : state === 'thinking'
-                ? 'bg-yellow-500 opacity-50 cursor-wait'
+                ? 'bg-yellow-500 hover:bg-yellow-600 cursor-pointer'
                 : alwaysListening
                 ? 'bg-green-500 hover:bg-green-600 ring-2 ring-green-500/50'
                 : 'bg-zenna-accent hover:bg-indigo-600'
             } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-            aria-label={state === 'listening' ? 'Stop listening' : 'Start listening'}
+            aria-label={state === 'thinking' ? 'Stop thinking' : state === 'listening' ? 'Stop listening' : 'Start listening'}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               {state === 'listening' ? (
                 // Stop icon when listening
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
               ) : state === 'thinking' ? (
-                // Loading spinner when thinking
+                // Loading spinner when thinking (clickable to cancel)
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" className="animate-spin origin-center" />
               ) : (
                 // Microphone icon when idle
@@ -179,10 +185,16 @@ export default function VoiceControls({
       </div>
 
       {/* State Text */}
-      <p className="mt-3 text-xs text-zenna-muted/50">
+      <p className="mt-3 text-xs text-zenna-muted/50 text-center max-w-[250px]">
         {state === 'idle' && (alwaysListening ? 'Listening for your voice...' : 'Click to speak')}
         {state === 'listening' && (isActivelySpeaking ? 'I hear you...' : isSilent ? 'Waiting for speech...' : 'Listening...')}
-        {state === 'thinking' && 'Thinking...'}
+        {state === 'thinking' && (
+          thinkingElapsed < 10
+            ? `Thinking... (${thinkingElapsed}s)`
+            : thinkingElapsed < 30
+            ? `${thinkingStatus || 'Working on it...'} (${thinkingElapsed}s) — Click to cancel`
+            : `${thinkingStatus || 'Taking longer than usual...'} (${thinkingElapsed}s) — Click to stop`
+        )}
         {state === 'speaking' && 'Click to interrupt'}
         {state === 'error' && 'Error - try again'}
       </p>

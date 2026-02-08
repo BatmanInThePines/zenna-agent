@@ -958,23 +958,33 @@ ${JSON.stringify(snippets, null, 2)}`
 
     const stream = new ReadableStream({
       async start(controller) {
-        // Timeout handling - send "thinking longer" message after 10 seconds
-        const THINKING_TIMEOUT_MS = 10000;
-        const HARD_TIMEOUT_MS = 60000; // Increased for tool use
-        let thinkingTimeoutSent = false;
+        // Escalating thinking feedback — keeps user informed during long operations
+        const HARD_TIMEOUT_MS = 120000; // 2 minutes for complex tool chains
         let responseStarted = false;
+        let toolsActive = false;
         const startTime = Date.now();
 
-        const thinkingTimeout = setTimeout(() => {
-          if (!responseStarted) {
-            thinkingTimeoutSent = true;
-            const thinkingEvent = `data: ${JSON.stringify({
-              type: 'thinking',
-              content: "I'm taking a moment to think about this carefully..."
-            })}\n\n`;
-            controller.enqueue(encoder.encode(thinkingEvent));
-          }
-        }, THINKING_TIMEOUT_MS);
+        // Escalating thinking messages at 10s, 30s, 60s
+        const thinkingTimeouts: NodeJS.Timeout[] = [];
+        const THINKING_STAGES = [
+          { delay: 10000, message: "Working on this — it may require a few steps..." },
+          { delay: 30000, message: "Still working... this is a complex request. You can click the yellow button to stop." },
+          { delay: 60000, message: "This is taking longer than expected. Click the yellow button to cancel and try rephrasing your request." },
+        ];
+
+        for (let i = 0; i < THINKING_STAGES.length; i++) {
+          const stage = THINKING_STAGES[i];
+          thinkingTimeouts.push(setTimeout(() => {
+            if (!responseStarted) {
+              const thinkingEvent = `data: ${JSON.stringify({
+                type: 'thinking',
+                content: stage.message,
+                stage: i,
+              })}\n\n`;
+              controller.enqueue(encoder.encode(thinkingEvent));
+            }
+          }, stage.delay));
+        }
 
         try {
           // Create a promise that rejects after hard timeout
@@ -1017,17 +1027,31 @@ ${JSON.stringify(snippets, null, 2)}`
             );
 
             for await (const chunk of responseStream) {
-              if (!responseStarted) {
-                responseStarted = true;
-                clearTimeout(thinkingTimeout);
-              }
-
-              // Check if this is a tool status message
-              if (chunk.startsWith('[Fetching')) {
-                // Send as a special status event
+              // Check if this is a tool status message (new format: [status:action:tool:index:total])
+              if (chunk.startsWith('[status:')) {
+                toolsActive = true;
+                // Parse structured status: [status:executing:notion_search:1:3]
+                const statusBody = chunk.replace('[status:', '').replace(']\n', '').replace(']', '').trim();
+                const parts = statusBody.split(':');
+                const statusEvent = `data: ${JSON.stringify({
+                  type: 'status',
+                  action: parts[0],     // 'executing' | 'completed' | 'thinking'
+                  tool: parts[1],       // tool name or 'processing_results'
+                  toolIndex: parts[2] ? parseInt(parts[2]) : undefined,
+                  totalTools: parts[3] ? parseInt(parts[3]) : undefined,
+                })}\n\n`;
+                controller.enqueue(encoder.encode(statusEvent));
+              } else if (chunk.startsWith('[Fetching')) {
+                // Legacy format — backwards compat
+                toolsActive = true;
                 const statusEvent = `data: ${JSON.stringify({ type: 'status', content: chunk })}\n\n`;
                 controller.enqueue(encoder.encode(statusEvent));
               } else {
+                // Actual text response — clear thinking timeouts
+                if (!responseStarted) {
+                  responseStarted = true;
+                  thinkingTimeouts.forEach(t => clearTimeout(t));
+                }
                 fullResponse += chunk;
                 // Send text chunk
                 const event = `data: ${JSON.stringify({ type: 'text', content: chunk })}\n\n`;
@@ -1046,7 +1070,7 @@ ${JSON.stringify(snippets, null, 2)}`
             for await (const chunk of responseStream) {
               if (!responseStarted) {
                 responseStarted = true;
-                clearTimeout(thinkingTimeout);
+                thinkingTimeouts.forEach(t => clearTimeout(t));
               }
               fullResponse += chunk;
 
@@ -1066,7 +1090,7 @@ ${JSON.stringify(snippets, null, 2)}`
               timeoutPromise
             ]);
             responseStarted = true;
-            clearTimeout(thinkingTimeout);
+            thinkingTimeouts.forEach(t => clearTimeout(t));
             fullResponse = response.content;
 
             // Send complete response
@@ -1117,7 +1141,7 @@ ${JSON.stringify(snippets, null, 2)}`
 
           controller.close();
         } catch (error) {
-          clearTimeout(thinkingTimeout);
+          thinkingTimeouts.forEach(t => clearTimeout(t));
           console.error('Streaming error:', error);
 
           // Provide user-friendly error message

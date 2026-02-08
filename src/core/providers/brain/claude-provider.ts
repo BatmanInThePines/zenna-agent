@@ -622,20 +622,20 @@ export class ClaudeProvider implements BrainProvider {
           (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
         );
 
-        // Yield a "thinking" message to show user we're fetching data
-        const toolNames = toolUseBlocks.map(t => t.name).join(', ');
-        yield `[Fetching real-time data: ${toolNames}...]\n\n`;
-
         // Add assistant's response to messages
         claudeMessages = [
           ...claudeMessages,
           { role: 'assistant' as const, content: response.content },
         ];
 
-        // Execute tools
+        // Execute tools with per-tool status updates
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
-        for (const toolBlock of toolUseBlocks) {
+        for (let i = 0; i < toolUseBlocks.length; i++) {
+          const toolBlock = toolUseBlocks[i];
           console.log(`[ClaudeProvider] Executing tool: ${toolBlock.name}`);
+
+          // Signal which tool is executing
+          yield `[status:executing:${toolBlock.name}:${i + 1}:${toolUseBlocks.length}]\n`;
 
           let toolResult: string;
           if (executeToolFn) {
@@ -648,11 +648,19 @@ export class ClaudeProvider implements BrainProvider {
             toolResult = 'Tool execution not available';
           }
 
+          // Signal tool completed
+          yield `[status:completed:${toolBlock.name}:${i + 1}:${toolUseBlocks.length}]\n`;
+
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolBlock.id,
             content: toolResult,
           });
+        }
+
+        // Signal between iterations — Claude is processing results
+        if (iterations < maxIterations) {
+          yield `[status:thinking:processing_results:${iterations}:${maxIterations}]\n`;
         }
 
         // Add tool results
