@@ -469,7 +469,11 @@ export class SupabaseIdentityStore implements IdentityStore {
     }
 
     // Reverse to get chronological order (oldest first)
-    return (data || []).reverse();
+    // CRITICAL FIX: Filter out empty messages that cause Claude API errors
+    // Error: "messages.X: all messages must have non-empty content"
+    return (data || [])
+      .reverse()
+      .filter((msg) => msg.content && msg.content.trim() !== '');
   }
 
   /**
