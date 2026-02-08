@@ -79,7 +79,7 @@ export async function mcpSearch(options: SearchOptions): Promise<SearchResult> {
 
     return {
       success: true,
-      content: data.result || data.content || JSON.stringify(data),
+      content: data.data || data.result || data.content || JSON.stringify(data),
     };
   } catch (error) {
     console.error('[MCP Client] Network error:', error);
