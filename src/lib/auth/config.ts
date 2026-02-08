@@ -172,12 +172,28 @@ export const authConfig: NextAuthConfig = {
 
       // On initial sign-in, set up the token from user data
       if (trigger === 'signIn' && user?.email) {
-        // Fetch full user data from database
-        const { data: dbUser } = await supabase
-          .from('users')
-          .select('id, email, role, onboarding_completed, settings, user_type, god_mode')
-          .eq('email', user.email)
-          .single();
+        // Fetch full user data from database with retry for race condition
+        let dbUser = null;
+        let retries = 3;
+
+        while (retries > 0 && !dbUser) {
+          const { data, error } = await supabase
+            .from('users')
+            .select('id, email, role, onboarding_completed, settings, user_type, god_mode')
+            .eq('email', user.email)
+            .single();
+
+          if (data) {
+            dbUser = data;
+          } else if (retries > 1) {
+            // Wait 500ms before retry (database might not have committed yet)
+            console.log(`[JWT] User not found on attempt ${4 - retries}, retrying... Error:`, error?.message);
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } else {
+            console.error(`[JWT] Failed to find user after retries:`, user.email, error);
+          }
+          retries--;
+        }
 
         if (dbUser) {
           token.userId = dbUser.id;
@@ -216,6 +232,17 @@ export const authConfig: NextAuthConfig = {
               };
             }
           }
+        } else {
+          // Fallback: if user not found in DB, set minimal token data from OAuth
+          // This can happen during race conditions or database issues
+          console.warn('[JWT] User not found in database, using OAuth data:', user.email);
+          token.email = user.email;
+          token.role = 'user';
+          token.isAdmin = user.email === ADMIN_EMAIL;
+          token.isFather = user.email === ADMIN_EMAIL;
+          token.onboardingCompleted = false;
+          // We can't set userId without a database record - this will cause issues
+          // but at least the user can try again
         }
       } else if (token.userId) {
         // On subsequent requests, refresh key data from database

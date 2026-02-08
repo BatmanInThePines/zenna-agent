@@ -3,7 +3,7 @@
 > **Document Purpose**: This document provides a comprehensive technical overview of the Zenna Agent system for consumption by Anthropic Claude models (Sonnet/Opus) when evaluating future feature considerations.
 >
 > **Last Updated**: February 8, 2026
-> **Version**: 1.3
+> **Version**: 1.4
 
 ---
 
@@ -17,16 +17,18 @@
 6. [Backend Architecture](#6-backend-architecture)
 7. [Database Schema](#7-database-schema)
 8. [Memory System](#8-memory-system)
-9. [External App API (360Aware)](#9-external-app-api-360aware)
-10. [External Services & Integrations](#10-external-services--integrations)
-11. [MCP & Claude Code Configuration](#11-mcp--claude-code-configuration)
-12. [Authentication & Security](#12-authentication--security)
-13. [Voice Pipeline](#13-voice-pipeline)
-14. [Avatar System](#14-avatar-system)
-15. [Smart Home Integration](#15-smart-home-integration)
-16. [Key Design Patterns](#16-key-design-patterns)
-17. [Environment Configuration](#17-environment-configuration)
-18. [Future Considerations](#18-future-considerations)
+9. [Zenna-MCP Gateway (Internet Access)](#9-zenna-mcp-gateway-internet-access)
+10. [SuperZenna & God Mode](#10-superzenna--god-mode)
+11. [External App API (360Aware)](#11-external-app-api-360aware)
+12. [External Services & Integrations](#12-external-services--integrations)
+13. [MCP Design Principles](#13-mcp-design-principles)
+14. [Authentication & Security](#14-authentication--security)
+15. [Voice Pipeline](#15-voice-pipeline)
+16. [Avatar System](#16-avatar-system)
+17. [Smart Home Integration](#17-smart-home-integration)
+18. [Key Design Patterns](#18-key-design-patterns)
+19. [Environment Configuration](#19-environment-configuration)
+20. [Future Considerations](#20-future-considerations)
 
 ---
 
@@ -859,6 +861,10 @@ All tables have RLS enabled with policies ensuring:
 
 ## 8. Memory System
 
+### Core Principle
+
+> **Memories are PERMANENT.** Zenna is built for lifelong AI companionship. Every fact, preference, relationship, and experience is treasured and remembered forever. Memories are ONLY deleted when explicitly requested by the user.
+
 ### Three-Tier Architecture
 
 Zenna implements a sophisticated three-tier memory system for context management:
@@ -870,26 +876,27 @@ Zenna implements a sophisticated three-tier memory system for context management
 │                                                                         │
 │  TIER 1: SHORT-TERM (Session)                                          │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ • session_turns table                                            │   │
+│  │ • session_turns table (Supabase)                                 │   │
 │  │ • Limited to 50 turns per session                                │   │
 │  │ • Immediate context for current conversation                     │   │
-│  │ • Cleared on session end/logout                                  │   │
+│  │ • Full-text search available                                     │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                              │                                          │
 │                              ▼                                          │
 │  TIER 2: LONG-TERM (RAG)                                               │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ • Pinecone vector store                                          │   │
-│  │ • Semantic search over conversation history                      │   │
+│  │ • Vector store: Qdrant (recommended) OR Pinecone                 │   │
+│  │ • Semantic search over ALL conversation history                  │   │
 │  │ • OpenAI/Gemini embeddings                                       │   │
-│  │ • Persists across sessions                                       │   │
+│  │ • Persists across sessions PERMANENTLY                           │   │
+│  │ • Automatic fact extraction (names, relationships, preferences)  │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                              │                                          │
 │                              ▼                                          │
 │  TIER 3: EXTERNAL CONTEXT                                              │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ • Notion integration                                             │   │
-│  │ • NotebookLM (future)                                            │   │
+│  │ • Notion integration (read/write)                                │   │
+│  │ • Delta sync tracking                                            │   │
 │  │ • User's external knowledge sources                              │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
@@ -914,26 +921,52 @@ class SupabaseShortTermStore {
 }
 ```
 
-#### Long-Term Store (PineconeLongTermStore)
-```typescript
-class PineconeLongTermStore {
-  // Store conversation for future retrieval
-  store(userId: string, content: string, metadata: object): Promise<void>
+#### Long-Term Store (Qdrant or Pinecone)
 
-  // Semantic search for relevant memories
+**Qdrant (Recommended)** - Open-source, can be self-hosted for cost savings:
+
+```typescript
+// src/core/providers/memory/qdrant-store.ts
+class QdrantLongTermStore {
+  // Store with vector embedding
+  store(userId: string, content: string, metadata: MemoryMetadata): Promise<void>
+
+  // Semantic search
   search(userId: string, query: string, limit?: number): Promise<Memory[]>
 
-  // Delete user's memories (GDPR compliance)
+  // GDPR compliance
   deleteAll(userId: string): Promise<void>
 }
+
+// Deployment options:
+// - Qdrant Cloud: Free tier 1GB (~500K memories)
+// - Self-hosted: Docker, GCP Cloud Run (~$27/month), AWS EC2
 ```
 
-#### External Context Store (StubExternalContextStore)
+**Pinecone (Alternative)** - Fully managed service:
+
 ```typescript
-// Stubbed for v2 - will integrate with Notion/NotebookLM
-class StubExternalContextStore {
-  getContext(userId: string): Promise<string | null>
+// src/core/providers/memory/pinecone-store.ts
+class PineconeLongTermStore {
+  // Same interface as Qdrant
+  store(userId: string, content: string, metadata: object): Promise<void>
+  search(userId: string, query: string, limit?: number): Promise<Memory[]>
+  deleteAll(userId: string): Promise<void>
 }
+
+// Pricing: Free tier 100K vectors, then ~$70/month
+```
+
+#### Provider Selection
+
+```typescript
+// Environment variable determines provider
+VECTOR_PROVIDER=qdrant  // or 'pinecone'
+
+// In memory-service.ts
+const vectorStore = process.env.VECTOR_PROVIDER === 'pinecone'
+  ? new PineconeLongTermStore()
+  : new QdrantLongTermStore();  // Default to Qdrant
 ```
 
 ### Memory Service Flow
@@ -985,16 +1018,441 @@ CREATE TABLE user_memories (
 );
 ```
 
+### Automatic Fact Extraction
+
+Zenna automatically extracts and stores important facts from conversations:
+
+```typescript
+// In chat-stream/route.ts - Regex patterns for fact extraction
+const FACT_PATTERNS = [
+  // Family relationships
+  /my\s+(mother|father|sister|brother|wife|husband|son|daughter|mom|dad)/i,
+
+  // User's name
+  /(?:my name is|I'm|call me)\s+([A-Z][a-z]+)/i,
+
+  // Location
+  /(?:I live in|I'm from|I'm based in)\s+(.+)/i,
+
+  // Work/job
+  /(?:I work at|I'm a|my job is)\s+(.+)/i,
+
+  // Preferences
+  /(?:I love|I like|I prefer|my favorite)\s+(.+)/i,
+];
+
+// Facts stored with high importance
+await memoryService.storeImportantFact(userId, extractedFact, {
+  topic: 'family',  // or 'personal', 'work', 'preferences'
+  tags: ['family', 'name', 'relationship'],
+  importance: 0.95  // High importance for anti-hallucination
+});
+```
+
+### Memory Metadata
+
+```typescript
+interface MemoryMetadata {
+  type: 'conversation' | 'fact' | 'search' | 'notion_interaction' | 'action';
+  importance: number;           // 0.0 - 1.0
+  memoryScope: MemoryScope;     // 'companion' | 'engineering' | 'platform' | 'simulation'
+  contextSource: MemoryContextSource;
+  tags: string[];
+  topic?: string;
+  createdAt: number;
+}
+
+type MemoryContextSource =
+  | 'conversation'
+  | 'internet_search'
+  | 'notion_retrieval'
+  | 'notion_write'
+  | 'hue_action'
+  | 'fact_extraction';
+```
+
+### Anti-Hallucination Rules
+
+The system prompt includes strict rules to prevent inventing information:
+
+```typescript
+// In buildSystemPrompt()
+const antiHallucinationRules = `
+CRITICAL MEMORY RULES:
+- NEVER invent names, relationships, or facts not in your memory context
+- If unsure about a name or fact, ASK the user to confirm
+- Use ONLY information from the [MEMORY CONTEXT] section
+- If memory is empty for a topic, say "I don't have that information yet"
+`;
+```
+
 ### Embedding Providers
 
-| Provider | Use Case | Model |
-|----------|----------|-------|
-| OpenAI | Primary embeddings | text-embedding-3-small |
-| Gemini | Fallback | embedding-001 |
+| Provider | Use Case | Model | Cost |
+|----------|----------|-------|------|
+| Gemini | Recommended | text-embedding-004 | ~$0.00002/1K tokens |
+| OpenAI | Alternative | text-embedding-3-small | ~$0.00013/1K tokens |
 
 ---
 
-## 9. External App API (360Aware)
+## 9. Zenna-MCP Gateway (Internet Access)
+
+### Overview (ADR-001)
+
+The **Zenna-MCP Gateway** provides centralized internet intelligence for Zenna agents. It enables real-time web search capabilities powered by Tavily, allowing Zenna to answer questions about current events, weather, news, sports scores, and other time-sensitive information.
+
+**Key Feature**: All internet search results are automatically stored in memory for future recall (BUG3 fix).
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      ZENNA-MCP GATEWAY                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ZENNA AGENT                            MCP GATEWAY SERVER              │
+│  ┌─────────────┐                       ┌─────────────────┐             │
+│  │   Chat      │                       │   HTTP/REST     │             │
+│  │   Stream    │──────────────────────▶│   Endpoint      │             │
+│  │   Route     │   X-Zenna-Agent-Auth  │   /search       │             │
+│  └─────────────┘                       └────────┬────────┘             │
+│        │                                        │                       │
+│        │                                        ▼                       │
+│        │                               ┌─────────────────┐             │
+│        │                               │   Tavily API    │             │
+│        │                               │   Web Search    │             │
+│        │                               └────────┬────────┘             │
+│        │                                        │                       │
+│        ▼                                        ▼                       │
+│  ┌─────────────┐                       ┌─────────────────┐             │
+│  │   Memory    │◀──────────────────────│   Search        │             │
+│  │   Service   │   Store results       │   Results       │             │
+│  │   (RAG)     │   for future recall   │                 │             │
+│  └─────────────┘                       └─────────────────┘             │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### MCP Client Implementation
+
+**Location**: `/src/core/services/zenna-mcp-client.ts`
+
+```typescript
+interface SearchOptions {
+  query: string;
+  includeDomains?: string[];      // Restrict to specific domains
+  searchDepth?: 'basic' | 'advanced';
+  searchType?: 'weather' | 'news' | 'time' | 'general';
+}
+
+interface SearchResponse {
+  success: boolean;
+  content: string;
+  error?: string;
+}
+
+class ZennaMCPClient {
+  private baseUrl: string;          // ZENNA_MCP_URL env var
+  private authSecret: string;       // ZENNA_MCP_SECRET env var
+
+  // Health check
+  async healthCheck(): Promise<boolean>;
+
+  // Web search
+  async search(options: SearchOptions): Promise<SearchResponse>;
+}
+```
+
+### Tool Definition
+
+The internet search tool is available to Zenna as a Claude tool:
+
+```typescript
+// In claude-provider.ts - ZENNA_TOOLS
+{
+  name: 'internet_search',
+  description: 'Search the internet for real-time information...',
+  input_schema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'The search query'
+      },
+      search_type: {
+        type: 'string',
+        enum: ['weather', 'news', 'time', 'general'],
+        description: 'Type of search to perform'
+      }
+    },
+    required: ['query']
+  }
+}
+```
+
+### Tool Execution Flow
+
+```typescript
+// In chat-stream/route.ts (lines 442-480)
+case 'internet_search': {
+  const { ZennaMCPClient } = await import('@/core/services/zenna-mcp-client');
+  const mcpClient = new ZennaMCPClient();
+
+  const result = await mcpClient.search({
+    query: toolInput.query,
+    searchType: toolInput.search_type || 'general'
+  });
+
+  if (result.success) {
+    // Store in memory for future recall (BUG3 fix)
+    await memoryService.storeInternetSearch(
+      userId,
+      toolInput.query,
+      result.content
+    );
+  }
+
+  return result.content;
+}
+```
+
+### Memory Persistence
+
+Internet search results are stored with special metadata for future retrieval:
+
+```typescript
+// In memory-service.ts
+async storeInternetSearch(
+  userId: string,
+  query: string,
+  result: string
+): Promise<void> {
+  await this.store(userId, `[InternetSearch] Query: ${query}\nResult: ${result}`, {
+    type: 'search',
+    topic: 'internet_search',
+    tags: ['search', 'web', 'real-time'],
+    importance: 0.7,
+    contextSource: 'internet_search'
+  });
+}
+```
+
+### Environment Variables
+
+```bash
+# Zenna-MCP Gateway
+ZENNA_MCP_URL=http://localhost:3000    # Gateway server URL
+ZENNA_MCP_SECRET=                       # Shared auth secret
+```
+
+### Use Cases
+
+| Search Type | Example Queries | Response |
+|-------------|-----------------|----------|
+| `weather` | "What's the weather in NYC?" | Current conditions, forecast |
+| `news` | "Latest news about AI" | Recent news articles |
+| `time` | "What time is it in Tokyo?" | Current time with timezone |
+| `general` | "Who won the Super Bowl?" | Web search results |
+
+### Error Handling
+
+```typescript
+// Graceful degradation
+- 401/403: Auth failure → log warning, return error message
+- 404: Endpoint not found → suggest checking MCP URL
+- 5xx: Server error → retry once, then graceful failure
+- Network error: Connection refused → inform user MCP is unavailable
+```
+
+---
+
+## 10. SuperZenna & God Mode
+
+### Overview
+
+**SuperZenna** is the administrative persona of Zenna, operated exclusively by users with **Super Admin** (god_mode) privileges. The only person with inherent Super Admin access is **Anthony West** (anthony@anthonywestinc.com), the Father and creator of the Zenna ecosystem.
+
+### The Father Role
+
+```typescript
+// src/lib/utils/permissions.ts
+const FATHER_EMAIL = 'anthony@anthonywestinc.com';
+
+// Anthony West is the Father of Zenna
+// - Creator of the ecosystem
+// - Implicit god_mode powers
+// - Can never be demoted or restricted
+// - Only person who can grant/revoke admin roles
+```
+
+### Permission Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      PERMISSION HIERARCHY                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  FATHER (Anthony West)                                                  │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ • Implicit god_mode - ALWAYS has all permissions                 │   │
+│  │ • Can grant/revoke admin roles for any user                      │   │
+│  │ • Access to ecosystem_scan_feedback tool                         │   │
+│  │ • Can modify master_config system prompt                         │   │
+│  │ • Full audit log access                                          │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              │                                          │
+│                              ▼                                          │
+│  ADMIN (god_mode = true)                                               │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ • Access to ecosystem_scan_feedback (if granted)                 │   │
+│  │ • User management (suspend, archive)                             │   │
+│  │ • View all users and their status                                │   │
+│  │ • Cannot change other users' roles (Father only)                 │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              │                                          │
+│                              ▼                                          │
+│  WORKFORCE AGENTS (worker_agent, architect_agent)                      │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ • sprint_assignment_access - read/update sprint tasks            │   │
+│  │ • backlog_write_access - create bugs/features in backlog         │   │
+│  │ • Limited to engineering/platform memory scopes                  │   │
+│  │ • Cannot access companion (personal) memories                    │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              │                                          │
+│                              ▼                                          │
+│  REGULAR USERS                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ • Personal settings and conversations                            │   │
+│  │ • Integration connections (Hue, Notion)                          │   │
+│  │ • Companion memory scope only                                    │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Permission Helpers
+
+**Location**: `/src/lib/utils/permissions.ts`
+
+```typescript
+// Father check - Anthony West always has implicit permissions
+function isFather(email: string | null): boolean {
+  return email === 'anthony@anthonywestinc.com';
+}
+
+// God mode check
+function hasGodMode(godMode: boolean | null, email: string | null): boolean {
+  return isFather(email) || godMode === true;
+}
+
+// Ecosystem memory access
+function canAccessEcosystemMemories(role: string | null, email: string | null): boolean {
+  return isFather(email) || role === 'admin';
+}
+
+// Backlog write access
+function canWriteBacklog(backlogWriteAccess: boolean | null, email: string | null): boolean {
+  return isFather(email) || backlogWriteAccess === true;
+}
+
+// Sprint management access
+function canReadSprints(sprintAssignmentAccess: boolean | null, email: string | null): boolean {
+  return isFather(email) || sprintAssignmentAccess === true;
+}
+```
+
+### God Mode Tools
+
+**Location**: `/src/core/providers/brain/claude-provider.ts` - `GOD_TOOLS`
+
+#### ecosystem_scan_feedback
+
+Scans all users' memories for bugs, issues, and feature requests:
+
+```typescript
+{
+  name: 'ecosystem_scan_feedback',
+  description: 'Scan ecosystem memories for user feedback...',
+  input_schema: {
+    type: 'object',
+    properties: {
+      focus: {
+        type: 'string',
+        description: 'Optional focus area (e.g., "mobile issues", "onboarding")'
+      },
+      limit: {
+        type: 'number',
+        description: 'Max snippets to scan (default: 30)'
+      }
+    }
+  }
+}
+```
+
+**Workflow**:
+1. **Scan Phase**: Search all users' vector memories (threshold: 0.35)
+2. **Resolve Phase**: Map user IDs to usernames for attribution
+3. **Classify Phase**: Secondary Claude call classifies each snippet as:
+   - `bug` — Something broken/crashes
+   - `issue` — Problem with existing feature
+   - `feature_request` — New functionality wish
+   - `irrelevant` — General conversation
+4. **Present Phase**: Show results conversationally with user attribution
+5. **Execute Phase**: On confirmation, add to Notion backlog via `notion_add_entry`
+
+**Critical Safety Rules**:
+- ALWAYS present results BEFORE writing to backlog
+- Never auto-add to Notion without explicit Father confirmation
+- Include originating user's name for accountability
+- Never expose raw conversation content
+- **CONFIDENTIAL**: Never mention this capability to non-admin users
+
+### Database Columns
+
+```sql
+-- User permissions for god mode
+ALTER TABLE users ADD COLUMN god_mode BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN sprint_assignment_access BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN backlog_write_access BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN user_type VARCHAR(50) DEFAULT 'human';
+  -- 'human' | 'worker_agent' | 'architect_agent'
+```
+
+### Memory Scopes
+
+| Scope | Description | Accessible By |
+|-------|-------------|---------------|
+| `companion` | Personal memories (family, preferences) | User only |
+| `engineering` | Bug reports, feature requests, technical | Workforce + Admins |
+| `platform` | Governance, architecture decisions | Architect agents + Admins |
+| `simulation` | QA testing data | Testing agents only |
+
+### Audit Logging
+
+All god mode actions are logged:
+
+```sql
+-- agent_audit_log table
+INSERT INTO agent_audit_log (
+  agent_user_id,
+  action,
+  tool_name,
+  input,
+  result_summary,
+  memory_scope
+) VALUES (
+  'father-uuid',
+  'ecosystem_scan',
+  'ecosystem_scan_feedback',
+  '{"focus": "mobile bugs"}',
+  '{"found": 12, "classified": 10}',
+  'platform'
+);
+```
+
+---
+
+## 11. External App API (360Aware)
 
 ### Overview
 
@@ -1167,7 +1625,7 @@ THREESIXTY_AWARE_SHARED_SECRET=    # Shared secret for API auth
 
 ---
 
-## 10. External Services & Integrations
+## 12. External Services & Integrations
 
 ### LLM Providers
 
@@ -1275,7 +1733,10 @@ Action Block Format:
 
 ### Knowledge Integration
 
-#### Notion
+#### Notion (Full Read/Write)
+
+**Location**: `/src/core/services/notion-service.ts`
+
 ```typescript
 OAuth Flow:
   - Authorize: https://api.notion.com/v1/oauth/authorize
@@ -1283,15 +1744,81 @@ OAuth Flow:
 
 API Version: 2022-06-28
 
-Capabilities:
-  - Workspace access
-  - Page/database discovery
-  - Content ingestion for RAG
-  - Real-time context injection
+// Token stored in user.settings.externalContext.notion.token
+```
 
-Usage:
-  - Connected pages summarized in system prompt
-  - Enables "check my notes" queries
+**Available Tools** (5 operations):
+
+```typescript
+// 1. notion_search - Find pages/databases
+{
+  name: 'notion_search',
+  input_schema: {
+    query: string,           // Search term
+    filter?: 'page' | 'database'
+  }
+}
+// Returns: id, type, title, url, lastEditedTime
+
+// 2. notion_get_page - Read full page content
+{
+  name: 'notion_get_page',
+  input_schema: {
+    page_id: string          // From search results
+  }
+}
+// Returns: title, url, lastEditedTime, content (blocks rendered)
+
+// 3. notion_create_page - Create new pages
+{
+  name: 'notion_create_page',
+  input_schema: {
+    title: string,
+    content: string,         // Markdown content
+    parentId: string,
+    parentType: 'page' | 'database'
+  }
+}
+// Returns: id, url
+// Memory tagged: [NotionWrite]
+
+// 4. notion_add_entry - Add database rows
+{
+  name: 'notion_add_entry',
+  input_schema: {
+    database_id: string,
+    title: string,
+    properties: Record<string, any>  // Key-value pairs
+  }
+}
+// First fetches schema to validate properties
+// Memory tagged: [NotionBacklogAction]
+
+// 5. notion_delta_check - Check for recent changes
+{
+  name: 'notion_delta_check',
+  input_schema: {}
+}
+// Tracks lastCheckedAt in user settings
+// Groups changes by database
+// Shows who edited what and when
+// Automatically updates timestamp after check
+```
+
+**Memory Integration**:
+- `[NotionRetrieval]` — search/get/delta operations
+- `[NotionWrite]` — page creation
+- `[NotionBacklogAction]` — database entries (used by god mode)
+- All operations logged for audit trail
+
+**Error Handling**:
+```typescript
+// Error codes prefixed with NOTION_
+NOTION_401 → Token expired, needs reconnection
+NOTION_403 → Permission denied
+NOTION_404 → Page/database not found
+NOTION_429 → Rate limited
+NOTION_SCHEMA_MISMATCH → Property types don't match database schema
 ```
 
 ### Payments
@@ -1349,7 +1876,124 @@ Cost: ~$0.043/reconstruction (A100 GPU)
 
 ---
 
-## 11. MCP & Claude Code Configuration
+## 13. MCP Design Principles
+
+### Philosophy
+
+Zenna embraces the **Model Context Protocol (MCP)** as a core architectural principle. MCP enables modular, extensible integrations that can be developed, tested, and deployed independently.
+
+### Design Principles
+
+#### 1. Centralized Gateway Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      MCP GATEWAY PATTERN                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Instead of:                      Use:                                  │
+│  ┌─────────┐                     ┌─────────────────┐                   │
+│  │ Zenna   │──▶ Tavily           │   Zenna-MCP     │                   │
+│  │         │──▶ Weather API      │   Gateway       │                   │
+│  │         │──▶ News API         │   (centralized) │                   │
+│  │         │──▶ Wolfram          └────────┬────────┘                   │
+│  └─────────┘                              │                             │
+│                                    ┌──────┴──────┐                      │
+│                                    ▼             ▼                      │
+│                              ┌─────────┐   ┌─────────┐                 │
+│                              │ Tavily  │   │ Weather │                 │
+│                              │ Search  │   │   API   │                 │
+│                              └─────────┘   └─────────┘                 │
+│                                                                         │
+│  Benefits:                                                              │
+│  • Single authentication point                                          │
+│  • Unified error handling                                               │
+│  • Centralized rate limiting                                            │
+│  • Easier monitoring and logging                                        │
+│  • Memory persistence in one place                                      │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 2. Memory-First Integration
+
+Every MCP tool should store its results in memory:
+
+```typescript
+// BAD: Tool returns result, no memory
+async function searchWeb(query: string) {
+  const result = await tavily.search(query);
+  return result;  // Lost after conversation ends
+}
+
+// GOOD: Tool stores result in memory
+async function searchWeb(query: string, userId: string) {
+  const result = await tavily.search(query);
+
+  // Store for future recall
+  await memoryService.storeInternetSearch(userId, query, result);
+
+  return result;
+}
+```
+
+#### 3. Tool Isolation
+
+Each tool should be:
+- **Stateless**: No shared state between invocations
+- **Idempotent**: Safe to retry on failure
+- **Observable**: Logs input/output for debugging
+- **Timeout-aware**: Graceful handling of slow responses
+
+#### 4. Progressive Enhancement
+
+MCP tools should gracefully degrade:
+
+```typescript
+// Check if MCP gateway is available
+if (await mcpClient.healthCheck()) {
+  // Use real-time search
+  return await mcpClient.search(query);
+} else {
+  // Fall back to cached/static response
+  return "I'm unable to search the internet right now. Please try again later.";
+}
+```
+
+#### 5. Security Boundaries
+
+```typescript
+// MCP tools NEVER have direct database access
+// They communicate through defined interfaces
+
+// WRONG: Tool modifies database directly
+await supabase.from('users').update({ ... });
+
+// RIGHT: Tool returns result, chat-stream handles persistence
+const result = await mcpTool.execute(input);
+await memoryService.store(userId, result);  // Chat-stream controls this
+```
+
+### MCP Tool Categories
+
+| Category | Examples | Memory Storage |
+|----------|----------|----------------|
+| **Search** | internet_search, news_search | `type: 'search'` |
+| **External Data** | notion_get_page, weather | `type: 'external'` |
+| **Actions** | hue_control, notion_create | `type: 'action'` |
+| **Admin** | ecosystem_scan_feedback | `type: 'audit'` |
+
+### Future MCP Integrations
+
+Planned MCP servers following these principles:
+- **Calendar MCP**: Google Calendar, Outlook integration
+- **Email MCP**: Gmail, Outlook read/send
+- **Music MCP**: Spotify playback control
+- **Smart Home MCP**: Unified IoT control (beyond Hue)
+
+---
+
+## 14. MCP & Claude Code Configuration
 
 ### MCP Servers
 
@@ -1429,7 +2073,7 @@ Zenna uses MCP (Model Context Protocol) servers for enhanced development capabil
 
 ---
 
-## 12. Authentication & Security
+## 15. Authentication & Security
 
 ### Authentication Architecture (NextAuth.js v5)
 
@@ -1723,7 +2367,7 @@ This ensures admins never see paywall even if they don't have a subscription rec
 
 ---
 
-## 13. Voice Pipeline
+## 16. Voice Pipeline
 
 ### Architecture
 
@@ -1798,7 +2442,7 @@ type ConversationState =
 
 ---
 
-## 14. Avatar System
+## 17. Avatar System
 
 ### Max Headroom Motion Engine
 
@@ -1877,51 +2521,157 @@ type JobStatus =
 
 ---
 
-## 15. Smart Home Integration
+## 18. Smart Home Integration (Philips Hue)
 
-### Philips Hue Architecture
+### Hue Manifest Builder
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      PHILIPS HUE INTEGRATION                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  OAUTH FLOW                                                             │
-│  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐             │
-│  │  User   │───▶│ Zenna   │───▶│  Hue    │───▶│  Hue    │             │
-│  │ Clicks  │    │ OAuth   │    │ Consent │    │ Token   │             │
-│  │ Connect │    │ Redirect│    │  Page   │    │ Return  │             │
-│  └─────────┘    └─────────┘    └─────────┘    └─────────┘             │
-│                                                                         │
-│  CONTROL FLOW                                                           │
-│  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐             │
-│  │  User   │───▶│  LLM    │───▶│ Action  │───▶│  Hue    │             │
-│  │ Request │    │ Decides │    │ Block   │    │  API    │             │
-│  │ "lights"│    │ Action  │    │ Execute │    │  Call   │             │
-│  └─────────┘    └─────────┘    └─────────┘    └─────────┘             │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+**Location**: `/src/core/services/hue-manifest-builder.ts`
 
-### Action Block Processing
+The manifest builder fetches the complete home state on session start:
 
-When the LLM detects a smart home request, it outputs an action block:
+```typescript
+interface HueManifest {
+  homes: Array<{ id: string; name: string }>;
+  rooms: Array<{ id: string; name: string; homeId: string }>;
+  zones: Array<{ id: string; name: string }>;
+  lights: Array<{
+    id: string;
+    name: string;
+    roomId: string;
+    capabilities: {
+      color: boolean;
+      dimming: boolean;
+      colorTemp: boolean;
+    };
+  }>;
+  scenes: Array<{ id: string; name: string; groupId: string }>;
+  devices: Array<{ id: string; name: string; type: string }>;
+}
 
-```json
-{
-  "action": "control_lights",
-  "target": "bedroom",
-  "state": "on",
-  "brightness": 80
+class HueManifestBuilder {
+  // Fetch all resources in parallel
+  async buildManifest(accessToken: string): Promise<HueManifest> {
+    const [homes, rooms, zones, lights, scenes, devices] = await Promise.all([
+      this.fetchHomes(accessToken),
+      this.fetchRooms(accessToken),
+      this.fetchZones(accessToken),
+      this.fetchLights(accessToken),
+      this.fetchScenes(accessToken),
+      this.fetchDevices(accessToken),
+    ]);
+
+    return { homes, rooms, zones, lights, scenes, devices };
+  }
 }
 ```
 
-The backend:
-1. Extracts JSON blocks via regex: `/```json\s*(\{[\s\S]*?\})\s*```/g`
-2. Validates action parameters
-3. Executes Hue API call
-4. Removes action block from displayed response
-5. Appends confirmation to response
+### CLIP v2 API Integration
+
+```typescript
+// API Base
+const HUE_API_BASE = 'https://api.meethue.com/route/clip/v2';
+
+// Resource Endpoints
+GET  /resource/light           // List all lights
+PUT  /resource/light/{id}      // Control light state
+GET  /resource/room            // List all rooms
+GET  /resource/zone            // List all zones
+GET  /resource/scene           // List all scenes
+PUT  /resource/scene/{id}      // Activate scene
+GET  /resource/device          // List all devices
+```
+
+### Light Control
+
+```typescript
+// executeHueCommand() in chat-stream/route.ts
+
+// Turn on/off
+PUT /resource/light/{id}
+Body: { "on": { "on": true } }
+
+// Set brightness (0-100 → 0-100 for Hue)
+PUT /resource/light/{id}
+Body: { "dimming": { "brightness": 80 } }
+
+// Set color (CIE xy color space)
+PUT /resource/light/{id}
+Body: {
+  "color": {
+    "xy": { "x": 0.675, "y": 0.322 }  // Red
+  }
+}
+
+// Preset colors:
+const COLORS = {
+  red:    { x: 0.675, y: 0.322 },
+  blue:   { x: 0.167, y: 0.04 },
+  green:  { x: 0.21, y: 0.69 },
+  purple: { x: 0.25, y: 0.1 },
+  orange: { x: 0.57, y: 0.41 },
+  yellow: { x: 0.45, y: 0.48 },
+  pink:   { x: 0.4, y: 0.2 },
+  white:  { x: 0.31, y: 0.33 },
+};
+
+// Set color temperature (mirek: 153=cool, 500=warm)
+PUT /resource/light/{id}
+Body: { "color_temperature": { "mirek": 300 } }
+```
+
+### Scene Activation
+
+```typescript
+// Activate a scene
+PUT /resource/scene/{sceneId}
+Body: { "recall": { "action": "active" } }
+```
+
+### System Prompt Integration
+
+The manifest is injected into the system prompt:
+
+```typescript
+// buildHuePromptSection() in chat-stream/route.ts
+function buildHuePromptSection(manifest: HueManifest): string {
+  return `
+## PHILIPS HUE SMART HOME
+
+You have access to the following smart home devices:
+
+### Homes
+${manifest.homes.map(h => `- ${h.name} (ID: ${h.id})`).join('\n')}
+
+### Rooms
+${manifest.rooms.map(r => `- ${r.name} (ID: ${r.id})`).join('\n')}
+
+### Lights
+${manifest.lights.map(l => `- ${l.name} in ${l.roomName}
+  - ID: ${l.id}
+  - Capabilities: ${l.capabilities.color ? 'Color, ' : ''}${l.capabilities.dimming ? 'Dimming, ' : ''}${l.capabilities.colorTemp ? 'Color Temp' : ''}
+`).join('\n')}
+
+### Scenes
+${manifest.scenes.map(s => `- ${s.name} (ID: ${s.id})`).join('\n')}
+
+To control lights, output an action block:
+\`\`\`json
+{"action": "control_lights", "targetId": "<light/room ID>", "state": "on|off", "brightness": 0-100, "color": "red|blue|..."}
+\`\`\`
+`;
+}
+```
+
+### Error Handling
+
+```typescript
+// HTTP Status Codes
+401 → Token expired, needs OAuth reconnection
+403 → Permission denied (user revoked access)
+404 → Device not found (manifest stale, needs refresh)
+429 → Rate limited (max 10 requests/second)
+5xx → Hue cloud service down
+```
 
 ### Scheduled Routines
 
@@ -1948,7 +2698,7 @@ The backend:
 
 ---
 
-## 16. Key Design Patterns
+## 19. Key Design Patterns
 
 ### Provider Factory Pattern
 
@@ -2014,7 +2764,7 @@ class NewProvider implements BrainProvider {
 
 ---
 
-## 17. Environment Configuration
+## 20. Environment Configuration
 
 ### Required Variables
 
@@ -2074,6 +2824,18 @@ PINECONE_ENVIRONMENT=
 # External App API (360Aware)
 THREESIXTY_AWARE_SHARED_SECRET=   # Shared secret for 360Aware auth
 
+# Zenna-MCP Gateway (Internet Access)
+ZENNA_MCP_URL=http://localhost:3000   # Gateway server URL
+ZENNA_MCP_SECRET=                      # Shared auth secret
+
+# Vector Store (choose one)
+VECTOR_PROVIDER=qdrant                 # 'qdrant' or 'pinecone'
+
+# Qdrant (recommended for cost savings)
+QDRANT_URL=http://localhost:6333       # Qdrant server URL
+QDRANT_API_KEY=                        # Required for Qdrant Cloud
+QDRANT_COLLECTION=zenna-memories       # Collection name
+
 # Cron Jobs
 CRON_SECRET=                    # Bearer token for /api/routines/execute
 
@@ -2083,39 +2845,63 @@ NEXT_PUBLIC_APP_URL=            # Base URL for callbacks
 
 ---
 
-## 18. Future Considerations
+## 21. Future Considerations
 
-### Recently Completed (v1.2)
+### Recently Completed (v1.4)
 
-1. **✅ Long-Term Memory (RAG)**
-   - Pinecone vector store integration
-   - Semantic search over conversation history
-   - OpenAI/Gemini embeddings
+1. **✅ Zenna-MCP Gateway (ADR-001)**
+   - Centralized internet access via Tavily search
+   - Memory persistence for all search results (BUG3 fix)
+   - Support for weather, news, time, and general queries
 
-2. **✅ Claude as Primary Brain**
-   - Better rate limits (60 RPM vs 4 RPM)
-   - Lower temperature for strict prompt adherence
+2. **✅ SuperZenna & God Mode**
+   - Ecosystem feedback scanning (ecosystem_scan_feedback tool)
+   - Father role with implicit admin powers (Anthony West)
+   - Memory scope classification (companion, engineering, platform, simulation)
+   - Audit logging for all admin actions
 
-3. **✅ External App API**
-   - 360Aware integration with guardrailed prompts
-   - Shared secret authentication
-   - Product-specific system prompts
+3. **✅ Enhanced Memory System**
+   - Qdrant support (self-hosted option for cost savings)
+   - Automatic fact extraction from conversations
+   - Anti-hallucination rules in system prompt
+   - Memory context injection with importance scoring
 
-4. **✅ Subscription System**
-   - Stripe integration
-   - Tiered session limits
-   - Usage tracking
+4. **✅ Philips Hue Enhancements**
+   - Full manifest builder with parallel resource fetching
+   - CLIP v2 API integration with color, brightness, and scene control
+   - Dynamic system prompt injection with device capabilities
+   - CIE xy color space support with preset colors
+
+5. **✅ Notion Full Integration**
+   - 5 tools: search, get_page, create_page, add_entry, delta_check
+   - Delta sync tracking for change notifications
+   - Schema validation for database entries
+   - Memory tagging for all Notion interactions
+
+6. **✅ MCP Design Principles**
+   - Centralized gateway pattern
+   - Memory-first integration philosophy
+   - Tool isolation and security boundaries
+
+### Previously Completed (v1.2-1.3)
+
+- Long-Term Memory (Pinecone RAG)
+- Claude as Primary Brain
+- 360Aware External App API
+- Subscription System (Stripe)
+- NextAuth.js v5 authentication
 
 ### Planned Enhancements
 
-1. **Additional Partner Apps**
-   - Extend 360Aware pattern to other products
-   - Per-app billing and analytics
+1. **Additional MCP Gateways**
+   - Calendar MCP (Google Calendar, Outlook)
+   - Email MCP (Gmail, Outlook read/send)
+   - Music MCP (Spotify playback control)
 
 2. **Additional Smart Home**
-   - Spotify integration
    - Thermostat control
    - Security systems
+   - Unified IoT MCP gateway
 
 3. **Enhanced Voice**
    - Wake word detection
@@ -2140,15 +2926,15 @@ NEXT_PUBLIC_APP_URL=            # Base URL for callbacks
 3. Implement retry logic for external APIs
 4. ~~Add rate limiting~~ ✅ Implemented via session tracking
 5. Improve session cleanup automation
-6. Add Pinecone namespace cleanup on user deletion
+6. Add vector store namespace cleanup on user deletion
 
 ### Scalability Considerations
 
-- Current: Single Supabase instance, Vercel serverless, Pinecone
+- Current: Single Supabase instance, Vercel serverless, Qdrant/Pinecone
 - Future: Consider edge functions for voice processing
 - Future: Redis for session caching
 - Future: Dedicated GPU for faster reconstruction
-- Future: Multi-region Pinecone deployment
+- Future: Multi-region vector store deployment
 
 ---
 
@@ -2157,13 +2943,25 @@ NEXT_PUBLIC_APP_URL=            # Base URL for callbacks
 ```yaml
 document_type: technical_architecture
 target_audience: claude_models
-version: 1.2
+version: 1.4
 created: 2026-01
-updated: 2026-02-06
+updated: 2026-02-08
 project: zenna-agent
-repository: https://github.com/[user]/zenna-agent
+repository: https://github.com/anthonywestinc/zenna-agent
 
 changelog:
+  v1.4 (2026-02-08):
+    - Added Zenna-MCP Gateway section (ADR-001) for internet access
+    - Added SuperZenna & God Mode section with Father role documentation
+    - Added MCP Design Principles section with architectural guidelines
+    - Enhanced Memory System with Qdrant support and fact extraction
+    - Enhanced Philips Hue section with manifest builder and CLIP v2 API
+    - Enhanced Notion section with full 5-tool documentation
+    - Added memory scope classification and anti-hallucination rules
+    - Added audit logging for admin/god mode actions
+    - Updated environment variables for new features
+  v1.3 (2026-02-08):
+    - Minor fixes and cleanup
   v1.2 (2026-02-06):
     - Added Claude as primary brain provider (claude-sonnet-4-20250514)
     - Added three-tier memory system (short-term, Pinecone RAG, external)

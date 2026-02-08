@@ -31,7 +31,18 @@
       "Bash(vercel logs:*)",
       "Bash(mother 's name?\" in the memory instead of the actual answer.\n\nNow filters out memories that start with question patterns like:\n- \"what is my\", \"who is my\", \"tell me\", \"do you know\", etc.\n\nThis ensures the LLM receives actual answers and facts, not \nechoed questions that provide no useful information.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(set NODE_OPTIONS=--max-old-space-size=4096)",
-      "WebFetch(domain:zenna.anthonywestinc.com)"
+      "WebFetch(domain:zenna.anthonywestinc.com)",
+      "Bash(wc:*)",
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(git ls-tree:*)",
+      "Bash(vercel:*)",
+      "WebFetch(domain:vercel.com)",
+      "Bash(ls:*)",
+      "WebFetch(domain:www.notion.so)",
+      "Bash(npm search:*)",
+      "Bash(git init:*)",
+      "Bash(railway:*)",
+      "Bash(powershell -Command:*)"
     ]
   }
 }
