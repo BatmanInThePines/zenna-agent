@@ -274,6 +274,10 @@ export default function Avatar({
   // Error state adds hue rotation
   const errorFilter = state === 'error' ? 'hue-rotate(-40deg) ' : '';
 
+  // Brightness boost — lifts dark avatars so they're visible on the dark UI
+  // Applied as a CSS filter (non-destructive, doesn't alter image data)
+  const brightnessFilter = 'brightness(1.5) ';
+
   return (
     <div
       ref={containerRef}
@@ -285,7 +289,7 @@ export default function Avatar({
         minHeight: fillContainer ? 0 : 320,
       }}
     >
-      {/* Main avatar canvas - drop-shadow filter creates silhouette-respecting glow */}
+      {/* Main avatar canvas - brightness + drop-shadow glow */}
       <canvas
         ref={canvasRef}
         width={canvasSize}
@@ -294,9 +298,9 @@ export default function Avatar({
         style={{
           width: canvasSize,
           height: canvasSize,
-          // drop-shadow respects the alpha channel of the canvas content
-          // This creates a glow that follows the avatar silhouette, not the rectangular bounds
-          filter: `${errorFilter}${dropShadowFilter}`,
+          // brightness(1.5) lifts dark images so they pop on the dark UI
+          // drop-shadow respects the alpha channel for silhouette glow
+          filter: `${errorFilter}${brightnessFilter}${dropShadowFilter}`,
         }}
       />
 
