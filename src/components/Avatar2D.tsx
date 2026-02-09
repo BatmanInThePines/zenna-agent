@@ -2,58 +2,6 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react';
 
-// Processes avatar image: brightens dark pixels and removes only pure-black background
-// Two-pass approach:
-//   1. Brighten: Lift all dark subject pixels so avatar looks vivid on dark UI
-//   2. Background removal: Strip only pure-black (R+G+B ≤ 6) pixels for glow silhouette
-function processAvatarImage(img: HTMLImageElement): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext('2d');
-
-  if (!ctx) return canvas;
-
-  // Draw the original image
-  ctx.drawImage(img, 0, 0);
-
-  // Get image data
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-
-    // Pass 1: Remove only truly pure-black background pixels
-    // These are pixels where ALL channels are nearly zero — the flat background
-    // Threshold is very tight (sum ≤ 6) to avoid touching any subject detail
-    if (r + g + b <= 6) {
-      data[i + 3] = 0; // Fully transparent
-      continue;
-    }
-
-    // Pass 2: Brighten dark subject pixels to counteract dark-on-dark wash-out
-    // Apply a curves-style lift: boost shadows/midtones, leave highlights alone
-    // This ensures dark fur, leather, shadows become visible on the dark UI
-    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-    if (luminance < 180) {
-      // Stronger boost for darker pixels, tapering off for brighter ones
-      // boost factor ranges from ~1.8 (very dark) to ~1.0 (midtones)
-      const boost = 1.0 + 0.8 * Math.pow(1.0 - luminance / 180, 1.5);
-      data[i]     = Math.min(255, Math.round(r * boost));
-      data[i + 1] = Math.min(255, Math.round(g * boost));
-      data[i + 2] = Math.min(255, Math.round(b * boost));
-    }
-  }
-
-  // Put the modified image data back
-  ctx.putImageData(imageData, 0, 0);
-
-  return canvas;
-}
-
 // Emotion color system based on psychological research (Plutchik's wheel + studies)
 // Maps emotional states to colors that resonate with human perception
 const EMOTION_COLORS = {
@@ -189,22 +137,15 @@ export default function Avatar({
     }
   }, [state]);
 
-  // Reference to processed canvas (brightened + background removed)
-  const processedCanvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  // Load image, brighten dark pixels, and strip pure-black background
+  // Load the avatar image as-is — no pixel manipulation
+  // User/TRELLIS owns image quality and background removal
   useEffect(() => {
     const img = new window.Image();
     img.crossOrigin = 'anonymous';
     img.src = currentAvatarUrl;
 
     img.onload = () => {
-      // Process the image: brighten dark subject pixels + remove pure-black background
-      // This ensures the avatar is vivid on dark UI and glow follows the silhouette
-      const processedCanvas = processAvatarImage(img);
-      processedCanvasRef.current = processedCanvas;
-
-      // Store reference to original image (for dimensions)
+      // Store reference to original image
       imageRef.current = img;
 
       // Calculate dimensions to fit within canvas while preserving aspect ratio
@@ -224,7 +165,7 @@ export default function Avatar({
 
   // Main animation loop
   useEffect(() => {
-    if (!imageLoaded || !processedCanvasRef.current) return;
+    if (!imageLoaded || !imageRef.current) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -233,7 +174,7 @@ export default function Avatar({
     if (!ctx) return;
 
     const animate = () => {
-      if (!canvas || !ctx || !processedCanvasRef.current) return;
+      if (!canvas || !ctx || !imageRef.current) return;
 
       timeRef.current += 0.016;
       const time = timeRef.current;
@@ -252,7 +193,7 @@ export default function Avatar({
       const imgX = centerX - imageDimensions.width / 2;
       const imgY = centerY - imageDimensions.height / 2;
 
-      // Draw the processed avatar image (with black background removed)
+      // Draw the avatar image exactly as uploaded — no pixel manipulation
       ctx.save();
 
       // Apply breathing scale
@@ -260,9 +201,9 @@ export default function Avatar({
       ctx.scale(breathe, breathe);
       ctx.translate(-centerX, -centerY);
 
-      // Draw processed image - black background has been removed for proper glow effect
+      // Draw original image directly — user/TRELLIS owns quality & background
       ctx.drawImage(
-        processedCanvasRef.current,
+        imageRef.current,
         imgX,
         imgY,
         imageDimensions.width,
