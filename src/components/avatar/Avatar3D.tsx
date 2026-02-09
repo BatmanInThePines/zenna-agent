@@ -264,27 +264,27 @@ export default function Avatar3D({
   // =============================================================================
 
   const setupLighting = useCallback((scene: THREE.Scene) => {
-    // Ambient light
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    // Ambient light — boosted to ensure dark models are visible on dark UI
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     scene.add(ambientLight);
 
-    // Key light (main)
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1);
+    // Key light (main) — strong front lighting
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
     keyLight.position.set(1, 1, 2);
     scene.add(keyLight);
 
-    // Fill light (softer)
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    // Fill light — lifted to reduce harsh shadows on dark models
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.8);
     fillLight.position.set(-1, 0.5, 1);
     scene.add(fillLight);
 
     // Rim light (back light for separation)
-    const rimLight = new THREE.DirectionalLight(0xffffff, 0.3);
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.5);
     rimLight.position.set(0, 0.5, -1);
     scene.add(rimLight);
 
     // Emotion-colored point light (dynamic)
-    const emotionLight = new THREE.PointLight(parseInt(colors.primary.replace('#', ''), 16), 0.5, 5);
+    const emotionLight = new THREE.PointLight(parseInt(colors.primary.replace('#', ''), 16), 0.6, 5);
     emotionLight.position.set(0, 0, 2);
     emotionLight.name = 'emotionLight';
     scene.add(emotionLight);
@@ -830,6 +830,10 @@ export default function Avatar3D({
 
   const errorFilter = state === 'error' ? 'hue-rotate(-40deg) ' : '';
 
+  // Brightness + contrast boost — lifts dark avatars so they pop on the dark UI
+  // Applied as CSS filters (non-destructive, doesn't alter image data)
+  const brightnessFilter = 'brightness(2.0) contrast(1.2) ';
+
   // =============================================================================
   // RENDER
   // =============================================================================
@@ -865,14 +869,14 @@ export default function Avatar3D({
         minHeight: fillContainer ? 0 : 320,
       }}
     >
-      {/* 3D Canvas */}
+      {/* 3D Canvas — brightness boost + glow */}
       <canvas
         ref={canvasRef}
         className="relative z-10"
         style={{
           width: canvasSize,
           height: canvasSize,
-          filter: `${errorFilter}${dropShadowFilter}`,
+          filter: `${errorFilter}${brightnessFilter}${dropShadowFilter}`,
         }}
       />
 
