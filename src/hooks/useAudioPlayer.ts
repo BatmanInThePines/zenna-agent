@@ -18,6 +18,42 @@ interface AudioChunkInfo {
   duration: number;
 }
 
+// --- iOS Audio Ducking Helpers ---
+
+/** Detect iOS Safari (iPad, iPhone, iPod) */
+function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+/**
+ * iOS audio ducking volume boost factor.
+ * iOS Safari reduces audio volume ~40-50% when it detects mic activity.
+ * We compensate by boosting gain on the output node.
+ */
+const IOS_DUCKING_GAIN_BOOST = 1.8;
+
+/**
+ * Reset the AudioContext to clear iOS ducking state.
+ * iOS Safari remembers ducking even after mic is released — creating a fresh
+ * AudioContext clears the internal flag.
+ */
+export async function resetAudioContextForDucking(
+  currentCtx: AudioContext | null
+): Promise<AudioContext> {
+  // Close the old context to release the ducked session
+  if (currentCtx && currentCtx.state !== 'closed') {
+    try { await currentCtx.close(); } catch { /* ignore */ }
+  }
+  // Create a fresh context — iOS won't duck this one until mic is re-opened
+  const newCtx = new AudioContext();
+  if (newCtx.state === 'suspended') {
+    await newCtx.resume();
+  }
+  return newCtx;
+}
+
 /**
  * Audio player hook for streaming audio playback with interruption support
  *
@@ -57,6 +93,11 @@ export function useAudioPlayer(options: AudioPlayerOptions = {}) {
 
     // Create gain node for volume control
     const gainNode = ctx.createGain();
+    // On iOS, boost gain to counteract audio ducking
+    if (isIOS()) {
+      gainNode.gain.value = IOS_DUCKING_GAIN_BOOST;
+      console.log('[iOS Audio] Applied ducking compensation gain:', IOS_DUCKING_GAIN_BOOST);
+    }
     gainNode.connect(ctx.destination);
     gainNodeRef.current = gainNode;
 
@@ -280,11 +321,29 @@ export function useAudioPlayer(options: AudioPlayerOptions = {}) {
     await play();
   }, [stop, addChunk, play]);
 
-  // Set volume (0-1)
+  // Set volume (0-1, automatically scaled for iOS ducking compensation)
   const setVolume = useCallback((volume: number) => {
     if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = Math.max(0, Math.min(1, volume));
+      const clamped = Math.max(0, Math.min(1, volume));
+      // On iOS, scale the requested volume by the ducking boost factor
+      gainNodeRef.current.gain.value = isIOS() ? clamped * IOS_DUCKING_GAIN_BOOST : clamped;
     }
+  }, []);
+
+  // Reset AudioContext to clear iOS audio ducking state.
+  // Call this after microphone usage ends, before playing TTS audio.
+  const resetForIOSDucking = useCallback(async () => {
+    if (!isIOS()) return;
+
+    console.log('[iOS Audio] Resetting AudioContext to clear ducking state');
+    const newCtx = await resetAudioContextForDucking(audioContextRef.current);
+    audioContextRef.current = newCtx;
+
+    // Recreate gain node on the new context with boost
+    const gainNode = newCtx.createGain();
+    gainNode.gain.value = IOS_DUCKING_GAIN_BOOST;
+    gainNode.connect(newCtx.destination);
+    gainNodeRef.current = gainNode;
   }, []);
 
   // Cleanup on unmount
@@ -314,6 +373,7 @@ export function useAudioPlayer(options: AudioPlayerOptions = {}) {
     playBuffer,
     setVolume,
     initializeAudioContext,
+    resetForIOSDucking,
   };
 }
 
@@ -340,6 +400,10 @@ export function useSimpleAudioPlayer(options: AudioPlayerOptions = {}) {
     updateState('loading');
 
     const audio = new Audio(url);
+    // iOS ducking compensation: boost volume on HTML5 audio elements
+    if (isIOS()) {
+      audio.volume = Math.min(1.0, 0.95); // Max out volume on iOS
+    }
     audioRef.current = audio;
 
     audio.oncanplaythrough = () => {

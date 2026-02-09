@@ -11,6 +11,7 @@ import KnowledgeIngestionIndicator from '@/components/KnowledgeIngestionIndicato
 import VoiceControls from '@/components/VoiceControls';
 import { INTEGRATION_MANIFESTS, getIntegrationEducation } from '@/core/interfaces/integration-manifest';
 import GeolocationPrompt from '@/components/GeolocationPrompt';
+import { resetAudioContextForDucking } from '@/hooks/useAudioPlayer';
 
 interface Message {
   id: string;
@@ -71,9 +72,24 @@ function ChatPageContent() {
 
   // iOS detection for audio handling workarounds
   const isIOSRef = useRef<boolean>(false);
+  // Track whether mic was recently used (triggers AudioContext reset for ducking fix)
+  const micWasActiveRef = useRef<boolean>(false);
   useEffect(() => {
     isIOSRef.current = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }, []);
+
+  /**
+   * iOS Audio Ducking Fix: Reset AudioContext after mic usage.
+   * iOS Safari reduces audio volume ("ducks") when it detects microphone activity.
+   * Creating a fresh AudioContext clears the ducking flag so TTS plays at full volume.
+   */
+  const resetAudioContextIfDucked = useCallback(async () => {
+    if (!isIOSRef.current || !micWasActiveRef.current) return;
+    console.log('[iOS Audio] Resetting AudioContext to clear ducking after mic use');
+    const newCtx = await resetAudioContextForDucking(audioContextRef.current);
+    audioContextRef.current = newCtx;
+    micWasActiveRef.current = false;
   }, []);
 
   // iOS TTS audio pre-unlock refs (fixes gesture chain issue)
@@ -284,10 +300,9 @@ function ChatPageContent() {
             // Play audio if available (audio context will be initialized on user's first interaction)
             if (greetData.audioUrl) {
               const audio = new Audio(greetData.audioUrl);
+              if (isIOSRef.current) audio.volume = 1.0; // iOS ducking compensation
               audio.onended = () => {
                 setZennaState('idle');
-                // Auto-enable always-listening after greeting completes
-                setAlwaysListening(true);
               };
 
               // Try to play - if blocked by browser autoplay policy, show prompt
@@ -299,8 +314,6 @@ function ChatPageContent() {
               });
             } else {
               setZennaState('idle');
-              // Even without audio, enable always-listening after auth check completes
-              setAlwaysListening(true);
             }
           }
         } catch (greetError) {
@@ -473,6 +486,7 @@ function ChatPageContent() {
           if (isIOSRef.current && iosTtsAudioRef.current) {
             const audio = iosTtsAudioRef.current;
             audio.src = data.audioUrl;
+            audio.volume = 1.0; // iOS ducking compensation
             audio.load();
             audio.onended = () => setZennaState('idle');
             audio.onerror = () => {
@@ -635,6 +649,9 @@ function ChatPageContent() {
           // iOS-specific: Use pre-unlocked audio element to bypass gesture chain issue
           // The audio element was "warmed" on first tap, so .play() works after async ops
           if (isIOSRef.current && iosTtsAudioRef.current) {
+            // iOS ducking fix: reset AudioContext to clear ducking from mic usage
+            await resetAudioContextIfDucked();
+
             console.log('[TTS] Using iOS pre-unlocked audio element');
             const iosResponse = await fetch('/api/zenna/speak', {
               method: 'POST',
@@ -651,6 +668,7 @@ function ChatPageContent() {
 
               // Reuse the pre-unlocked element - just change the src
               audio.src = iosData.audioUrl;
+              audio.volume = 1.0; // Max volume to counteract any residual ducking
               audio.load();
 
               audio.onended = () => {
@@ -803,6 +821,7 @@ function ChatPageContent() {
 
       mediaRecorder.start(100);
       setZennaState('listening');
+      micWasActiveRef.current = true; // Track mic usage for iOS ducking reset
 
       // VAD loop with background noise detection
       vadIntervalRef.current = setInterval(() => {
@@ -1034,6 +1053,7 @@ function ChatPageContent() {
       setCurrentEmotion('curious');
       setCurrentTranscript('Listening...');
       audioChunksRef.current = [];
+      micWasActiveRef.current = true; // Track mic usage for iOS ducking reset
 
       console.log('[VAD] Push-to-talk started with VAD');
       console.log('[VAD] Silence threshold:', SILENCE_THRESHOLD);
@@ -1540,24 +1560,13 @@ function ChatPageContent() {
               setZennaState('speaking');
               const audio = new Audio(pendingGreetingAudio);
 
-              // When greeting finishes, enable always-listening mode by default
+              // When greeting finishes, go to idle (push-to-talk is default)
               audio.onended = () => {
                 setZennaState('idle');
-                // Enable always-listening mode after greeting completes
-                setAlwaysListening(true);
-                // Start listening after a short delay
-                setTimeout(() => {
-                  startAlwaysListening();
-                }, 500);
               };
 
               audio.onerror = () => {
                 setZennaState('idle');
-                // Still enable always-listening even if audio fails
-                setAlwaysListening(true);
-                setTimeout(() => {
-                  startAlwaysListening();
-                }, 500);
               };
 
               try {
@@ -1565,11 +1574,6 @@ function ChatPageContent() {
               } catch (err) {
                 console.error('Still failed to play audio:', err);
                 setZennaState('idle');
-                // Enable always-listening even on error
-                setAlwaysListening(true);
-                setTimeout(() => {
-                  startAlwaysListening();
-                }, 500);
               }
               setPendingGreetingAudio(null);
             }
