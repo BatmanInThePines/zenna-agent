@@ -15,8 +15,8 @@ import type {
   Message,
 } from '../../interfaces/brain-provider';
 
-// Tool definitions for Claude
-export const ZENNA_TOOLS: Anthropic.Tool[] = [
+// Base tools - always available (no external integrations required)
+export const BASE_TOOLS: Anthropic.Tool[] = [
   {
     name: 'web_search',
     description: `Search the internet for real-time information. Use this tool when the user asks about:
@@ -43,7 +43,10 @@ IMPORTANT: You MUST use this tool for weather questions - do not guess or make u
       required: ['query', 'type'],
     },
   },
-  // Notion Integration Tools
+];
+
+// Notion Integration Tools - only included when user explicitly requests Notion
+export const NOTION_TOOLS: Anthropic.Tool[] = [
   {
     name: 'notion_search',
     description: `Search the user's connected Notion workspace for pages and databases. Use when the user asks to find, look up, or search for something in their Notion workspace.
@@ -160,6 +163,10 @@ Returns a summary of all modifications including who changed what and when. Auto
     },
   },
 ];
+
+// Legacy export: All standard tools combined (for backwards compatibility)
+// NOTE: Prefer using BASE_TOOLS + conditionally adding NOTION_TOOLS based on user intent
+export const ZENNA_TOOLS: Anthropic.Tool[] = [...BASE_TOOLS, ...NOTION_TOOLS];
 
 /**
  * God-level ecosystem tools (conditionally included for admin/father users only).

@@ -6,7 +6,7 @@ import { brainProviderFactory } from '@/core/providers/brain';
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
 import { canAccessEcosystemMemories, isWorkforceUser, canWriteBacklog, canReadSprints, isAgentUser } from '@/lib/utils/permissions';
-import { ZENNA_TOOLS, GOD_TOOLS, WORKFORCE_TOOLS } from '@/core/providers/brain/claude-provider';
+import { BASE_TOOLS, NOTION_TOOLS, GOD_TOOLS, WORKFORCE_TOOLS } from '@/core/providers/brain/claude-provider';
 
 /**
  * Timeout wrapper for promises - prevents operations from hanging indefinitely.
@@ -39,6 +39,33 @@ const PRESTREAM_TIMEOUTS = {
   SAVE_TURN: 3000,      // 3s for saving user message
   STORE_FACTS: 2000,    // 2s per fact storage
 };
+
+/**
+ * Detect if user query requires Notion tools.
+ * Only include Notion tools when user explicitly asks for Notion functionality.
+ * This prevents unnecessary Notion lookups on simple queries like "what's the weather?"
+ */
+function requiresNotionTools(message: string): boolean {
+  const lowerMessage = message.toLowerCase();
+
+  // Explicit Notion mentions - highest priority
+  if (lowerMessage.includes('notion')) return true;
+
+  // Clear database/table/page operations that imply Notion
+  // Be conservative - only match clear intent patterns
+  const notionPatterns = [
+    /update.*(?:table|database|page|doc|backlog|sprint)/i,
+    /add.*(?:entry|row|item|task|bug|feature).*(?:to|in).*(?:table|database|backlog)/i,
+    /create.*(?:page|database|table).*(?:in|for)/i,
+    /search.*(?:my|the).*(?:workspace|pages|notes|docs)/i,
+    /find.*in.*(?:my|the).*(?:workspace|notes)/i,
+    /check.*(?:delta|changes|updates).*(?:in|on).*(?:table|database|workspace)/i,
+    /what's.*(?:new|changed).*(?:in|on).*(?:workspace|backlog)/i,
+    /log.*(?:this|a).*(?:bug|issue|feature|task).*(?:to|in)/i,
+  ];
+
+  return notionPatterns.some(pattern => pattern.test(message));
+}
 
 /**
  * Extract important facts from user messages
@@ -313,12 +340,12 @@ export async function POST(request: NextRequest) {
         identityStore.getMasterConfig(),
       ]),
       PRESTREAM_TIMEOUTS.USER_CONFIG,
-      [null, null],
+      [null, null] as [Awaited<ReturnType<typeof identityStore.getUser>> | null, Awaited<ReturnType<typeof identityStore.getMasterConfig>> | null],
       'getUser+getMasterConfig'
     );
 
-    if (!user) {
-      return new Response(JSON.stringify({ error: 'User not found or timeout' }), {
+    if (!user || !masterConfig) {
+      return new Response(JSON.stringify({ error: 'User or config not found (timeout)' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -1070,14 +1097,29 @@ ${JSON.stringify(snippets, null, 2)}`
               ) => AsyncGenerator<string, void, unknown>;
             };
 
-            // Build tool array based on user permissions
-            const activeTools = (isGodUser || hasWorkforceAccess)
-              ? [
-                  ...ZENNA_TOOLS,
-                  ...(isGodUser ? GOD_TOOLS : []),
-                  ...(hasWorkforceAccess ? WORKFORCE_TOOLS : []),
-                ]
-              : undefined; // undefined = use default ZENNA_TOOLS inside provider
+            // Build tool array based on user permissions AND query intent
+            // Notion tools are only included when:
+            // 1. User has Notion connected, AND
+            // 2. User explicitly requests Notion (mentions "notion" or asks for table/database operations)
+            const hasNotionConnected = !!user.settings?.externalContext?.notion?.token;
+            const needsNotion = hasNotionConnected && requiresNotionTools(message);
+
+            if (needsNotion) {
+              console.log('[Chat] Notion tools INCLUDED - user intent detected');
+            } else if (hasNotionConnected) {
+              console.log('[Chat] Notion tools EXCLUDED - no user intent for Notion');
+            }
+
+            // Start with base tools, conditionally add Notion
+            const baseToolSet = needsNotion
+              ? [...BASE_TOOLS, ...NOTION_TOOLS]
+              : BASE_TOOLS;
+
+            const activeTools = [
+              ...baseToolSet,
+              ...(isGodUser ? GOD_TOOLS : []),
+              ...(hasWorkforceAccess ? WORKFORCE_TOOLS : []),
+            ];
 
             const responseStream = claudeProvider.generateResponseStreamWithTools(
               history,
