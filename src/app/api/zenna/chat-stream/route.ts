@@ -6,7 +6,7 @@ import { brainProviderFactory } from '@/core/providers/brain';
 import type { Message } from '@/core/interfaces/brain-provider';
 import type { UserSettings } from '@/core/interfaces/user-identity';
 import { canAccessEcosystemMemories, isWorkforceUser, canWriteBacklog, canReadSprints, isAgentUser } from '@/lib/utils/permissions';
-import { BASE_TOOLS, NOTION_TOOLS, GOD_TOOLS, WORKFORCE_TOOLS } from '@/core/providers/brain/claude-provider';
+import { BASE_TOOLS, HUE_TOOLS, NOTION_TOOLS, GOD_TOOLS, WORKFORCE_TOOLS } from '@/core/providers/brain/claude-provider';
 
 /**
  * Timeout wrapper for promises - prevents operations from hanging indefinitely.
@@ -743,6 +743,87 @@ NEVER invent names or facts. If you don't know something, ask.`,
         }
       }
 
+      // ===== HUE LIGHT CONTROL =====
+      if (toolName === 'control_lights') {
+        const { target, state, brightness, color, scene } = input as {
+          target: string;
+          state?: 'on' | 'off';
+          brightness?: number;
+          color?: string;
+          scene?: string;
+        };
+
+        // Check if Hue is connected
+        const hueConfig = user?.settings?.integrations?.hue;
+        if (!hueConfig?.accessToken) {
+          return 'Philips Hue lights are not connected. Please connect Hue in Settings > Integrations first.';
+        }
+
+        // Build command object for executeHueCommand
+        const command: {
+          target?: string;
+          state?: string;
+          brightness?: number;
+          color?: { xy?: { x: number; y: number } };
+          color_temp?: { mirek?: number };
+          sceneName?: string;
+        } = { target };
+
+        // Set state if provided
+        if (state) {
+          command.state = state;
+        }
+
+        // Set brightness if provided (also implies turning on)
+        if (brightness !== undefined) {
+          command.brightness = brightness;
+          if (!state) command.state = 'on'; // Brightness change implies on
+        }
+
+        // Handle color (convert friendly names to Hue format)
+        if (color) {
+          command.state = 'on'; // Color change implies on
+          const colorMap: Record<string, { x: number; y: number }> = {
+            'red': { x: 0.675, y: 0.322 },
+            'green': { x: 0.409, y: 0.518 },
+            'blue': { x: 0.167, y: 0.04 },
+            'yellow': { x: 0.484, y: 0.477 },
+            'orange': { x: 0.6, y: 0.38 },
+            'purple': { x: 0.3, y: 0.15 },
+            'pink': { x: 0.45, y: 0.25 },
+          };
+          const lowerColor = color.toLowerCase();
+          if (colorMap[lowerColor]) {
+            command.color = { xy: colorMap[lowerColor] };
+          } else if (lowerColor === 'warm' || lowerColor === 'warm white') {
+            command.color_temp = { mirek: 400 }; // Warm white
+          } else if (lowerColor === 'cool' || lowerColor === 'cool white') {
+            command.color_temp = { mirek: 200 }; // Cool white
+          } else if (lowerColor === 'white') {
+            command.color_temp = { mirek: 300 }; // Neutral white
+          }
+        }
+
+        // Handle scene activation
+        if (scene) {
+          command.sceneName = scene;
+        }
+
+        try {
+          console.log('[Chat] Executing Hue control_lights tool:', JSON.stringify({ target, state, brightness, color, scene }));
+          const result = await executeHueCommand(hueConfig, command);
+          return result;
+        } catch (error) {
+          console.error('[control_lights] Hue error:', error);
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+          // Provide clean error messages for known Hue error types
+          if (errorMsg.startsWith('HUE_')) {
+            return errorMsg.replace(/^HUE_\w+:\s*/, '');
+          }
+          return `Failed to control lights: ${errorMsg}`;
+        }
+      }
+
       // ===== GOD-LEVEL: ECOSYSTEM FEEDBACK SCANNER =====
       if (toolName === 'ecosystem_scan_feedback') {
         // Double-check God-level access (belt + suspenders)
@@ -1098,10 +1179,11 @@ ${JSON.stringify(snippets, null, 2)}`
             };
 
             // Build tool array based on user permissions AND query intent
-            // Notion tools are only included when:
-            // 1. User has Notion connected, AND
-            // 2. User explicitly requests Notion (mentions "notion" or asks for table/database operations)
+            // Check integrations
             const hasNotionConnected = !!user.settings?.externalContext?.notion?.token;
+            const hasHueConnected = !!user.settings?.integrations?.hue?.accessToken;
+
+            // Notion tools only included when user explicitly requests Notion
             const needsNotion = hasNotionConnected && requiresNotionTools(message);
 
             if (needsNotion) {
@@ -1110,13 +1192,15 @@ ${JSON.stringify(snippets, null, 2)}`
               console.log('[Chat] Notion tools EXCLUDED - no user intent for Notion');
             }
 
-            // Start with base tools, conditionally add Notion
-            const baseToolSet = needsNotion
-              ? [...BASE_TOOLS, ...NOTION_TOOLS]
-              : BASE_TOOLS;
+            if (hasHueConnected) {
+              console.log('[Chat] Hue tools INCLUDED - user has Hue connected');
+            }
 
+            // Build tool array - Hue always included if connected (light commands are common)
             const activeTools = [
-              ...baseToolSet,
+              ...BASE_TOOLS,
+              ...(hasHueConnected ? HUE_TOOLS : []),
+              ...(needsNotion ? NOTION_TOOLS : []),
               ...(isGodUser ? GOD_TOOLS : []),
               ...(hasWorkforceAccess ? WORKFORCE_TOOLS : []),
             ];

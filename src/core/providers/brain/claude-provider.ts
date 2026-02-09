@@ -45,6 +45,49 @@ IMPORTANT: You MUST use this tool for weather questions - do not guess or make u
   },
 ];
 
+// Philips Hue light control tool - only included when user has Hue connected
+export const HUE_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'control_lights',
+    description: `Control Philips Hue smart lights. Use this tool when the user wants to:
+- Turn lights on or off ("turn on the lights", "lights off")
+- Adjust brightness ("set lights to 20%", "dim the bedroom", "brighten the living room")
+- Change colors ("make it blue", "set warm white", "red lights")
+- Activate scenes ("movie mode", "relax", "energize")
+
+You can control individual lights, rooms, or zones by name.
+
+IMPORTANT: Always use this tool for ANY light-related request. This is the ONLY way to control lights.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Name of the light, room, or zone to control (e.g., "Living Room", "Bedroom", "Kitchen Light"). If user says "all lights" or just "lights", use "all".',
+        },
+        state: {
+          type: 'string',
+          enum: ['on', 'off'],
+          description: 'Turn lights on or off',
+        },
+        brightness: {
+          type: 'number',
+          description: 'Brightness level 0-100. Use this for dimming requests like "set to 20%" or "dim to half".',
+        },
+        color: {
+          type: 'string',
+          description: 'Color name (red, blue, green, warm, cool, white) for color changes',
+        },
+        scene: {
+          type: 'string',
+          description: 'Scene name to activate (e.g., "Relax", "Energize", "Movie")',
+        },
+      },
+      required: ['target'],
+    },
+  },
+];
+
 // Notion Integration Tools - only included when user explicitly requests Notion
 export const NOTION_TOOLS: Anthropic.Tool[] = [
   {
