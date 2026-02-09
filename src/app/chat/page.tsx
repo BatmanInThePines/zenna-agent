@@ -162,12 +162,23 @@ function ChatPageContent() {
   const isSpeakingRef = useRef(false);
 
   // Thinking elapsed timer — counts seconds while in thinking state
+  // Includes timeout failsafe: auto-reset to idle after 60 seconds to prevent stuck states
+  const THINKING_TIMEOUT_SECONDS = 60;
   useEffect(() => {
     if (zennaState === 'thinking') {
       setThinkingElapsed(0);
       setThinkingStatus('');
       thinkingTimerRef.current = setInterval(() => {
-        setThinkingElapsed(prev => prev + 1);
+        setThinkingElapsed(prev => {
+          const newElapsed = prev + 1;
+          // Failsafe: if stuck thinking for too long, reset to idle
+          if (newElapsed >= THINKING_TIMEOUT_SECONDS) {
+            console.warn(`[Failsafe] Thinking timeout after ${THINKING_TIMEOUT_SECONDS}s, resetting to idle`);
+            setZennaState('idle');
+            setThinkingStatus('Request timed out. Please try again.');
+          }
+          return newElapsed;
+        });
       }, 1000);
     } else {
       if (thinkingTimerRef.current) {
@@ -180,6 +191,24 @@ function ChatPageContent() {
     return () => {
       if (thinkingTimerRef.current) clearInterval(thinkingTimerRef.current);
     };
+  }, [zennaState]);
+
+  // Speaking timeout failsafe — auto-reset to idle if audio playback hangs
+  const SPEAKING_TIMEOUT_SECONDS = 120; // 2 minutes max for any TTS playback
+  useEffect(() => {
+    if (zennaState !== 'speaking') return;
+
+    const timeout = setTimeout(() => {
+      console.warn(`[Failsafe] Speaking timeout after ${SPEAKING_TIMEOUT_SECONDS}s, resetting to idle`);
+      // Stop any playing audio
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+      setZennaState('idle');
+    }, SPEAKING_TIMEOUT_SECONDS * 1000);
+
+    return () => clearTimeout(timeout);
   }, [zennaState]);
 
   // Check authentication and load settings
