@@ -274,9 +274,10 @@ export default function Avatar({
   // Error state adds hue rotation
   const errorFilter = state === 'error' ? 'hue-rotate(-40deg) ' : '';
 
-  // Brightness boost — lifts dark avatars so they're visible on the dark UI
-  // Applied as a CSS filter (non-destructive, doesn't alter image data)
-  const brightnessFilter = 'brightness(1.5) ';
+  // Brightness + contrast boost — lifts dark avatars so they pop on the dark UI
+  // Applied as CSS filters (non-destructive, doesn't alter image data)
+  // brightness(2.0) makes dark fur/details visible; contrast(1.2) adds punch
+  const brightnessFilter = 'brightness(2.0) contrast(1.2) ';
 
   return (
     <div
