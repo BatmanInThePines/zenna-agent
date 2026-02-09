@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react';
 
-// Helper function to remove black/dark background from an image
+// Helper function to remove pure black background from an image
 // This makes the avatar silhouette work properly with drop-shadow glow effects
-function removeBlackBackground(img: HTMLImageElement, threshold: number = 30): HTMLCanvasElement {
+// Uses color variance to distinguish true black background from dark subject pixels
+// (e.g., dark fur, shadows) which have subtle color differences even at low brightness
+function removeBlackBackground(img: HTMLImageElement, threshold: number = 15): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = img.width;
   canvas.height = img.height;
@@ -19,21 +21,31 @@ function removeBlackBackground(img: HTMLImageElement, threshold: number = 30): H
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const data = imageData.data;
 
-  // Process each pixel - make black/near-black pixels transparent
+  // Process each pixel - only remove truly black/uniform-dark background pixels
+  // Preserve dark subject pixels that have color variation (fur, shadows, etc.)
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
 
-    // If the pixel is dark (black or near-black), make it transparent
-    // Using luminance-based calculation for better edge detection
     const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
 
+    // Only consider very dark pixels (luminance < threshold)
     if (luminance < threshold) {
-      // Calculate how transparent this pixel should be based on how dark it is
-      // Darker pixels become more transparent
-      const alpha = Math.max(0, (luminance / threshold) * 255);
-      data[i + 3] = Math.floor(alpha);
+      // Check color variance — true black background has R≈G≈B≈0
+      // Dark subject pixels (fur, leather, shadows) have subtle color differences
+      const maxChannel = Math.max(r, g, b);
+      const minChannel = Math.min(r, g, b);
+      const colorVariance = maxChannel - minChannel;
+
+      // Pure black background: all channels near zero with little variance
+      // Dark subject matter: may still have channel differences (warm browns, cool shadows)
+      if (colorVariance < 5 && maxChannel < threshold) {
+        // True background pixel — make transparent with smooth falloff
+        const alpha = Math.max(0, (luminance / threshold) * 255);
+        data[i + 3] = Math.floor(alpha);
+      }
+      // else: dark pixel with color info — keep fully opaque (part of avatar)
     }
   }
 
@@ -190,7 +202,7 @@ export default function Avatar({
     img.onload = () => {
       // Process the image to remove black background
       // This ensures drop-shadow glow follows the avatar silhouette, not the bounding box
-      const processedCanvas = removeBlackBackground(img, 35); // threshold of 35 for smooth edges
+      const processedCanvas = removeBlackBackground(img, 15); // low threshold — only strip pure black background, preserve dark avatar details
       processedCanvasRef.current = processedCanvas;
 
       // Store reference to original image (for dimensions)
