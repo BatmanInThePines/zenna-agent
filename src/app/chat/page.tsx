@@ -50,6 +50,10 @@ function ChatPageContent() {
   const [thinkingElapsed, setThinkingElapsed] = useState(0);
   const thinkingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Asynchronous input queue — allows user to type while Zenna is thinking/speaking
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const isProcessingQueueRef = useRef(false);
+
   // Integration onboarding state
   const [newIntegration, setNewIntegration] = useState<string | null>(null);
   const [showEducationPrompt, setShowEducationPrompt] = useState(false);
@@ -1219,10 +1223,49 @@ function ChatPageContent() {
     }
   }, [zennaState, handleUserMessage]);
 
-  // Handle text input submission
+  // Handle text input submission — queues if Zenna is busy, sends immediately if idle
   const handleTextSubmit = useCallback((text: string) => {
-    handleUserMessage(text);
-  }, [handleUserMessage]);
+    const isBusy = zennaState === 'thinking' || zennaState === 'speaking';
+
+    if (isBusy) {
+      // Queue the message for processing when Zenna returns to idle
+      setQueuedMessages(prev => [...prev, text]);
+      console.log(`[Queue] Message queued (${text.substring(0, 40)}...). Queue depth: ${queuedMessages.length + 1}`);
+    } else {
+      handleUserMessage(text);
+    }
+  }, [handleUserMessage, zennaState, queuedMessages.length]);
+
+  // Process queued messages when Zenna transitions to idle
+  // Bundles multiple queued messages into a single contextual prompt
+  useEffect(() => {
+    if (zennaState !== 'idle' || queuedMessages.length === 0 || isProcessingQueueRef.current) return;
+
+    isProcessingQueueRef.current = true;
+
+    // Small delay to let the UI settle before processing next message
+    const timer = setTimeout(() => {
+      const pending = [...queuedMessages];
+      setQueuedMessages([]);
+      isProcessingQueueRef.current = false;
+
+      if (pending.length === 1) {
+        // Single queued message — send directly
+        console.log('[Queue] Processing 1 queued message');
+        handleUserMessage(pending[0]);
+      } else {
+        // Multiple messages — contextually bundle them
+        const bundled = `[The user sent these follow-up messages while you were busy. Address them together:]\n${pending.map((msg, i) => `${i + 1}. ${msg}`).join('\n')}`;
+        console.log(`[Queue] Bundling ${pending.length} queued messages`);
+        handleUserMessage(bundled);
+      }
+    }, 300);
+
+    return () => {
+      clearTimeout(timer);
+      isProcessingQueueRef.current = false;
+    };
+  }, [zennaState, queuedMessages, handleUserMessage]);
 
   // Handle logout
   const handleLogout = useCallback(async () => {
@@ -1473,7 +1516,9 @@ function ChatPageContent() {
                 chatInput={
                   <ChatInput
                     onSubmit={handleTextSubmit}
-                    disabled={zennaState === 'listening' || zennaState === 'thinking' || zennaState === 'speaking'}
+                    disabled={zennaState === 'listening'}
+                    isBusy={zennaState === 'thinking' || zennaState === 'speaking'}
+                    queuedCount={queuedMessages.length}
                   />
                 }
               />
