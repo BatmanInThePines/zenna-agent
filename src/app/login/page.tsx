@@ -7,6 +7,7 @@ import { Suspense } from 'react';
 function LoginContent() {
   const searchParams = useSearchParams();
   const error = searchParams.get('error');
+  const message = searchParams.get('message');
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-br from-[#0a0a0f] via-[#0f0f18] to-[#0a0a0f]">
@@ -37,6 +38,13 @@ function LoginContent() {
           <p className="text-white/50 text-sm">AI-Powered Smart Home Assistant</p>
         </div>
 
+        {/* Success Message */}
+        {message === 'password_set' && (
+          <div className="mb-6 p-4 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-sm text-center">
+            Password set successfully! Sign in below.
+          </div>
+        )}
+
         {/* Error Message */}
         {error && (
           <div className="mb-6 p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center">
@@ -47,7 +55,9 @@ function LoginContent() {
             {error === 'Callback' && 'Authentication error. Please try again.'}
             {error === 'AccessDenied' && 'Access denied. Please contact support.'}
             {error === 'Configuration' && 'Server configuration error.'}
-            {!['OAuthSignin', 'OAuthCallback', 'OAuthCreateAccount', 'EmailCreateAccount', 'Callback', 'AccessDenied', 'Configuration'].includes(error) && 'An error occurred. Please try again.'}
+            {error === 'token_expired' && 'Your verification link has expired. Please request a new one.'}
+            {error === 'token_invalid' && 'Invalid verification link. Please request a new one.'}
+            {!['OAuthSignin', 'OAuthCallback', 'OAuthCreateAccount', 'EmailCreateAccount', 'Callback', 'AccessDenied', 'Configuration', 'token_expired', 'token_invalid'].includes(error) && 'An error occurred. Please try again.'}
           </div>
         )}
 

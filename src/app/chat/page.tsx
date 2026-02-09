@@ -75,6 +75,63 @@ function ChatPageContent() {
     isIOSRef.current = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   }, []);
+
+  // iOS TTS audio pre-unlock refs (fixes gesture chain issue)
+  const iosTtsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const iosAudioUnlockedRef = useRef(false);
+
+  // Initialize persistent iOS audio element on mount
+  useEffect(() => {
+    if (isIOSRef.current) {
+      const audio = document.createElement('audio');
+      audio.setAttribute('playsinline', '');
+      audio.setAttribute('webkit-playsinline', '');
+      audio.preload = 'auto';
+      document.body.appendChild(audio);
+      iosTtsAudioRef.current = audio;
+      console.log('[iOS Audio] Created persistent audio element');
+    }
+    return () => {
+      if (iosTtsAudioRef.current && iosTtsAudioRef.current.parentNode) {
+        iosTtsAudioRef.current.parentNode.removeChild(iosTtsAudioRef.current);
+      }
+    };
+  }, []);
+
+  // Unlock iOS audio on user gesture - call this early on any tap/click
+  const unlockIOSAudio = useCallback(() => {
+    if (iosAudioUnlockedRef.current || !iosTtsAudioRef.current) return;
+    const audio = iosTtsAudioRef.current;
+    audio.muted = true;
+    const p = audio.play();
+    if (p && p.then) {
+      p.then(() => {
+        audio.pause();
+        audio.muted = false;
+        audio.currentTime = 0;
+        iosAudioUnlockedRef.current = true;
+        console.log('[iOS Audio] Audio element unlocked successfully');
+      }).catch(() => {
+        audio.muted = false;
+        console.log('[iOS Audio] Silent play failed, will retry on next gesture');
+      });
+    }
+  }, []);
+
+  // Global gesture listener to unlock iOS audio on first interaction
+  useEffect(() => {
+    if (!isIOSRef.current) return;
+    const handler = () => unlockIOSAudio();
+    ['touchstart', 'click'].forEach(evt =>
+      document.addEventListener(evt, handler, { passive: true })
+    );
+    return () => {
+      ['touchstart', 'click'].forEach(evt =>
+        document.removeEventListener(evt, handler)
+      );
+    };
+  }, [unlockIOSAudio]);
+
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -379,6 +436,9 @@ function ChatPageContent() {
 
   // Start session handler - called when user clicks "Begin Session"
   const handleStartSession = useCallback(async () => {
+    // Unlock iOS audio on this user gesture (must happen synchronously on tap)
+    unlockIOSAudio();
+
     // Initialize audio context on user interaction (required by browsers)
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext();
@@ -409,12 +469,29 @@ function ChatPageContent() {
 
         // Play audio if available
         if (data.audioUrl) {
-          const audio = new Audio(data.audioUrl);
-          audio.onended = () => setZennaState('idle');
-          await audio.play().catch((err) => {
-            console.error('Audio playback failed:', err);
-            setZennaState('idle');
-          });
+          // iOS: Use pre-unlocked audio element
+          if (isIOSRef.current && iosTtsAudioRef.current) {
+            const audio = iosTtsAudioRef.current;
+            audio.src = data.audioUrl;
+            audio.load();
+            audio.onended = () => setZennaState('idle');
+            audio.onerror = () => {
+              console.error('iOS greeting audio error');
+              setZennaState('idle');
+            };
+            await audio.play().catch((err) => {
+              console.error('iOS greeting audio play failed:', err);
+              setZennaState('idle');
+            });
+          } else {
+            // Non-iOS: Use standard Audio element
+            const audio = new Audio(data.audioUrl);
+            audio.onended = () => setZennaState('idle');
+            await audio.play().catch((err) => {
+              console.error('Audio playback failed:', err);
+              setZennaState('idle');
+            });
+          }
         } else {
           setZennaState('idle');
         }
@@ -423,7 +500,7 @@ function ChatPageContent() {
       console.error('Failed to initialize Zenna:', error);
       setZennaState('idle');
     }
-  }, []);
+  }, [unlockIOSAudio]);
 
   // Interrupt current speech/processing/thinking
   const interruptSpeaking = useCallback(() => {
@@ -555,10 +632,10 @@ function ChatPageContent() {
             await audioContextRef.current.resume();
           }
 
-          // iOS-specific: Use the speak endpoint with base64 data URL
-          // iOS Safari has issues with blob URLs and streaming audio
-          if (isIOSRef.current) {
-            console.log('[TTS] Using iOS-compatible base64 audio');
+          // iOS-specific: Use pre-unlocked audio element to bypass gesture chain issue
+          // The audio element was "warmed" on first tap, so .play() works after async ops
+          if (isIOSRef.current && iosTtsAudioRef.current) {
+            console.log('[TTS] Using iOS pre-unlocked audio element');
             const iosResponse = await fetch('/api/zenna/speak', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -569,24 +646,12 @@ function ChatPageContent() {
             const iosData = await iosResponse.json();
 
             if (iosData.audioUrl) {
-              const audio = new Audio();
+              const audio = iosTtsAudioRef.current;
               currentAudioRef.current = audio;
 
-              // iOS requires setting src before other properties
+              // Reuse the pre-unlocked element - just change the src
               audio.src = iosData.audioUrl;
-              audio.preload = 'auto';
-
-              // Use load() to trigger iOS audio preparation
               audio.load();
-
-              audio.oncanplaythrough = async () => {
-                try {
-                  await audio.play();
-                } catch (playError) {
-                  console.error('[TTS] iOS play error:', playError);
-                  setZennaState('idle');
-                }
-              };
 
               audio.onended = () => {
                 currentAudioRef.current = null;
@@ -601,10 +666,20 @@ function ChatPageContent() {
                 currentAudioRef.current = null;
                 setZennaState('idle');
               };
+
+              // This works because the element was pre-unlocked on first tap
+              audio.play().catch((err) => {
+                console.error('[TTS] iOS play error:', err);
+                setZennaState('idle');
+              });
             } else {
-              console.warn('[TTS] No audio URL from iOS fallback');
+              console.warn('[TTS] No audio URL from iOS endpoint');
               setZennaState('idle');
             }
+          } else if (isIOSRef.current) {
+            // Fallback if pre-unlocked element not available (shouldn't happen)
+            console.warn('[TTS] iOS audio element not initialized, falling back');
+            setZennaState('idle');
           } else {
             // Non-iOS: Use streaming TTS endpoint for faster first audio
             const ttsResponse = await fetch('/api/zenna/tts-stream', {

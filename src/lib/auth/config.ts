@@ -1,7 +1,8 @@
 /**
  * NextAuth.js Configuration for Zenna
  *
- * OAuth Providers: Google, Apple, GitHub
+ * Auth Providers: Google, GitHub (OAuth) + Email/Password (Credentials)
+ * Apple Sign In: Temporarily disabled pending Apple Developer enrollment approval (ID: LT4MHCM7A8)
  * Database: Supabase (PostgreSQL)
  *
  * IMPORTANT: Only anthony@anthonywestinc.com (father) can change user roles
@@ -9,8 +10,10 @@
 
 import type { NextAuthConfig } from 'next-auth';
 import Google from 'next-auth/providers/google';
-import Apple from 'next-auth/providers/apple';
+// import Apple from 'next-auth/providers/apple'; // TODO: Re-enable after Apple Developer enrollment is approved
 import GitHub from 'next-auth/providers/github';
+import Credentials from 'next-auth/providers/credentials';
+import bcrypt from 'bcryptjs';
 import { createClient } from '@supabase/supabase-js';
 
 // Admin email (father of Zenna)
@@ -37,13 +40,57 @@ export const authConfig: NextAuthConfig = {
         },
       },
     }),
-    Apple({
-      clientId: process.env.APPLE_CLIENT_ID ?? '',
-      clientSecret: process.env.APPLE_CLIENT_SECRET ?? '',
-    }),
+    // Apple Sign In — temporarily disabled pending enrollment approval
+    // Apple({
+    //   clientId: process.env.APPLE_CLIENT_ID ?? '',
+    //   clientSecret: process.env.APPLE_CLIENT_SECRET ?? '',
+    // }),
     GitHub({
       clientId: process.env.GITHUB_CLIENT_ID ?? '',
       clientSecret: process.env.GITHUB_CLIENT_SECRET ?? '',
+    }),
+    Credentials({
+      id: 'credentials',
+      name: 'Email',
+      credentials: {
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) return null;
+
+        const email = credentials.email as string;
+        const password = credentials.password as string;
+
+        const supabase = getSupabaseClient();
+
+        // Look up user by email
+        const { data: user } = await supabase
+          .from('users')
+          .select('id, email, password_hash, email_verified, role, image')
+          .eq('email', email)
+          .single();
+
+        if (!user || !user.password_hash || user.password_hash === '') return null;
+        if (!user.email_verified) return null;
+
+        // Verify password with bcrypt
+        const valid = await bcrypt.compare(password, user.password_hash);
+        if (!valid) return null;
+
+        // Update last login
+        await supabase
+          .from('users')
+          .update({ last_login_at: new Date().toISOString() })
+          .eq('id', user.id);
+
+        // Return user object for NextAuth
+        return {
+          id: user.id,
+          email: user.email,
+          image: user.image,
+        };
+      },
     }),
   ],
   pages: {
@@ -58,7 +105,26 @@ export const authConfig: NextAuthConfig = {
       const supabase = getSupabaseClient();
 
       try {
-        // Check if user exists
+        // For credentials provider, user already exists in DB (created during send-link)
+        // Just update last login and allow sign-in
+        if (account.provider === 'credentials') {
+          const { data: existingUser } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', user.email)
+            .single();
+
+          if (!existingUser) return false;
+
+          await supabase
+            .from('users')
+            .update({ last_login_at: new Date().toISOString() })
+            .eq('id', existingUser.id);
+
+          return true;
+        }
+
+        // Check if user exists (OAuth flow)
         const { data: existingUser } = await supabase
           .from('users')
           .select('id, role, onboarding_completed')
