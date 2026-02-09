@@ -9,6 +9,38 @@ import { canAccessEcosystemMemories, isWorkforceUser, canWriteBacklog, canReadSp
 import { ZENNA_TOOLS, GOD_TOOLS, WORKFORCE_TOOLS } from '@/core/providers/brain/claude-provider';
 
 /**
+ * Timeout wrapper for promises - prevents operations from hanging indefinitely.
+ * Returns fallback value if the promise doesn't resolve within the timeout.
+ * CRITICAL: This is used to prevent pre-stream operations from hanging.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+  operationName: string
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => {
+      setTimeout(() => {
+        console.warn(`[Timeout] ${operationName} timed out after ${ms}ms, using fallback`);
+        resolve(fallback);
+      }, ms);
+    }),
+  ]);
+}
+
+// Pre-stream operation timeouts (in milliseconds)
+const PRESTREAM_TIMEOUTS = {
+  AUTH: 5000,           // 5s for auth check
+  USER_CONFIG: 5000,    // 5s for user + master config
+  HISTORY: 5000,        // 5s for conversation history
+  MEMORY_CONTEXT: 8000, // 8s for memory search (already has internal timeout)
+  SAVE_TURN: 3000,      // 3s for saving user message
+  STORE_FACTS: 2000,    // 2s per fact storage
+};
+
+/**
  * Extract important facts from user messages
  * Detects statements about family, preferences, personal info, etc.
  *
@@ -239,8 +271,13 @@ export async function POST(request: NextRequest) {
     const memoryService = await getMemoryService();
     const identityStore = memoryService.getIdentityStore();
 
-    // Verify authentication using NextAuth
-    const session = await auth();
+    // Verify authentication using NextAuth (with timeout protection)
+    const session = await withTimeout(
+      auth(),
+      PRESTREAM_TIMEOUTS.AUTH,
+      null,
+      'auth()'
+    );
 
     if (!session?.user?.id) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -269,14 +306,19 @@ export async function POST(request: NextRequest) {
       processedMessage = "I'm detecting some background noise. Please acknowledge this briefly and let me know you'll wait for me to speak clearly. Keep it to one short sentence.";
     }
 
-    // Get user and master config
-    const [user, masterConfig] = await Promise.all([
-      identityStore.getUser(userId),
-      identityStore.getMasterConfig(),
-    ]);
+    // Get user and master config (with timeout protection)
+    const [user, masterConfig] = await withTimeout(
+      Promise.all([
+        identityStore.getUser(userId),
+        identityStore.getMasterConfig(),
+      ]),
+      PRESTREAM_TIMEOUTS.USER_CONFIG,
+      [null, null],
+      'getUser+getMasterConfig'
+    );
 
     if (!user) {
-      return new Response(JSON.stringify({ error: 'User not found' }), {
+      return new Response(JSON.stringify({ error: 'User not found or timeout' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -297,8 +339,13 @@ export async function POST(request: NextRequest) {
     const isAgent = isAgentUser(user.userType);
     const defaultMemoryScope = isAgent ? 'engineering' : 'companion';
 
-    // Get conversation history (permanent, never deleted)
-    const storedHistory = await memoryService.getConversationHistory(userId);
+    // Get conversation history (permanent, never deleted) - with timeout protection
+    const storedHistory = await withTimeout(
+      memoryService.getConversationHistory(userId),
+      PRESTREAM_TIMEOUTS.HISTORY,
+      [], // Empty history on timeout - conversation still works, just no context
+      'getConversationHistory'
+    );
 
     // Build message history for LLM
     const systemPrompt = buildSystemPrompt(masterConfig, user.settings, user.role, session.user.email, user);
@@ -382,28 +429,41 @@ NEVER invent names or facts. If you don't know something, ask.`,
         ? 'simulation' as const
         : defaultMemoryScope as 'companion' | 'engineering' | 'platform' | 'simulation';
 
-      await memoryService.addConversationTurn(userId, 'user', message, {
-        memoryScope: msgScope,
-        tags: isAgent ? ['agent_interaction'] : undefined,
-      });
+      // Save user turn with timeout - don't block response if storage is slow
+      await withTimeout(
+        memoryService.addConversationTurn(userId, 'user', message, {
+          memoryScope: msgScope,
+          tags: isAgent ? ['agent_interaction'] : undefined,
+        }),
+        PRESTREAM_TIMEOUTS.SAVE_TURN,
+        undefined,
+        'addConversationTurn'
+      );
 
       // Extract and store important facts from user message
       // This ensures facts like "My father's name is X" are stored as high-importance memories
       const extractedFacts = extractFactsFromMessage(message);
       if (extractedFacts.length > 0) {
         console.log(`[Chat] Extracted ${extractedFacts.length} facts from user message:`, extractedFacts.map(f => f.fact));
-        for (const { fact, topic, tags } of extractedFacts) {
-          try {
-            await memoryService.storeImportantFact(userId, fact, {
+        // Store facts with timeout - don't block response if vector storage is slow
+        const factPromises = extractedFacts.map(({ fact, topic, tags }) =>
+          withTimeout(
+            memoryService.storeImportantFact(userId, fact, {
               topic,
               tags,
               importance: 0.95, // High importance for personal facts
-            });
-            console.log(`[Chat] Stored fact: "${fact}"`);
-          } catch (factError) {
+            }).then(() => {
+              console.log(`[Chat] Stored fact: "${fact}"`);
+            }),
+            PRESTREAM_TIMEOUTS.STORE_FACTS,
+            undefined,
+            `storeImportantFact(${fact.substring(0, 30)}...)`
+          ).catch((factError) => {
             console.error(`[Chat] Failed to store fact "${fact}":`, factError);
-          }
-        }
+          })
+        );
+        // Run all fact storage in parallel, don't await - fire and forget
+        Promise.all(factPromises).catch(() => {});
       }
     }
 
