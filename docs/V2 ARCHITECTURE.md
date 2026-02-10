@@ -2919,6 +2919,12 @@ NEXT_PUBLIC_APP_URL=            # Base URL for callbacks
    - Push notifications
    - Background listening
 
+### Known Issues (V3 Roadmap)
+
+1. **⚠️ Tool Orchestration Flaw** — Claude calls multiple tools autonomously when only one is needed. Example: "Set lights to 20%" triggers web_search + control_lights + notion_search, causing 60s timeouts. **V3 Solution:** Zenna-MCP as universal gateway with intent classification. See: `docs/V3_TOOL_ORCHESTRATION.md`
+
+2. **Supabase Latency** — Session/conversation queries can hang on cold starts. **V3 Solution:** Redis (hot) → ScyllaDB (warm) → S3 (cold) architecture.
+
 ### Technical Debt
 
 1. Implement HMAC-SHA256 webhook signature validation
