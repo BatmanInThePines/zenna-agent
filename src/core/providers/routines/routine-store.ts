@@ -6,18 +6,25 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createUserClient } from '@/lib/supabase/clients';
 import { ScheduledRoutine, RoutineSchedule } from '@/core/interfaces/integration-manifest';
 
 export interface RoutineStoreConfig {
   supabaseUrl: string;
   supabaseKey: string;
+  /** Supabase-compatible JWT for RLS-scoped access. */
+  accessToken?: string;
 }
 
 export class RoutineStore {
   private supabase: SupabaseClient;
 
   constructor(config: RoutineStoreConfig) {
-    this.supabase = createClient(config.supabaseUrl, config.supabaseKey);
+    if (config.accessToken) {
+      this.supabase = createUserClient(config.accessToken);
+    } else {
+      this.supabase = createClient(config.supabaseUrl, config.supabaseKey);
+    }
   }
 
   /**

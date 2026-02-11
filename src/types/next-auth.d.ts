@@ -24,6 +24,8 @@ declare module 'next-auth' {
       // Workforce agent fields
       userType: string;
       godMode: boolean;
+      // Supabase Auth: JWT for RLS-scoped database access
+      supabaseAccessToken?: string;
     };
   }
 
@@ -52,5 +54,8 @@ declare module 'next-auth/jwt' {
     // Workforce agent fields
     userType: string;
     godMode: boolean;
+    // Supabase Auth: JWT for RLS-scoped database access
+    supabaseAccessToken?: string;
+    supabaseTokenExp?: number;
   }
 }

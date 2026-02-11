@@ -15,6 +15,7 @@ import GitHub from 'next-auth/providers/github';
 import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { createClient } from '@supabase/supabase-js';
+import { createSupabaseJWT } from '@/lib/supabase/clients';
 
 // Admin email (father of Zenna)
 export const ADMIN_EMAIL = 'anthony@anthonywestinc.com';
@@ -262,6 +263,14 @@ export const authConfig: NextAuthConfig = {
           token.userType = dbUser.user_type || 'human';
           token.godMode = dbUser.god_mode || false;
 
+          // Mint Supabase-compatible JWT for RLS (1 hour lifetime)
+          try {
+            token.supabaseAccessToken = await createSupabaseJWT(dbUser.id, 3600);
+            token.supabaseTokenExp = Math.floor(Date.now() / 1000) + 3600;
+          } catch (e) {
+            console.error('[JWT] Failed to mint Supabase JWT:', e);
+          }
+
           // Get subscription status - for admins, grant unlimited access even without subscription record
           const isAdminUser = dbUser.role === 'admin' || dbUser.email === ADMIN_EMAIL;
 
@@ -302,6 +311,17 @@ export const authConfig: NextAuthConfig = {
           // but at least the user can try again
         }
       } else if (token.userId) {
+        // Refresh Supabase JWT if expired or missing (5-minute buffer before expiry)
+        const now = Math.floor(Date.now() / 1000);
+        if (!token.supabaseAccessToken || !token.supabaseTokenExp || token.supabaseTokenExp - now < 300) {
+          try {
+            token.supabaseAccessToken = await createSupabaseJWT(token.userId, 3600);
+            token.supabaseTokenExp = now + 3600;
+          } catch (e) {
+            console.error('[JWT] Failed to refresh Supabase JWT:', e);
+          }
+        }
+
         // On subsequent requests, refresh key data from database
         // This ensures role changes and subscription updates are reflected
         const { data: dbUser } = await supabase
@@ -368,6 +388,7 @@ export const authConfig: NextAuthConfig = {
         } | undefined;
         session.user.userType = (token.userType as string) || 'human';
         session.user.godMode = (token.godMode as boolean) || false;
+        session.user.supabaseAccessToken = token.supabaseAccessToken as string | undefined;
       }
       return session;
     },

@@ -57,6 +57,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createUserClient } from '@/lib/supabase/clients';
 
 // =============================================================================
 // TYPES
@@ -175,6 +176,7 @@ export async function canUserGenerate(userId: string, userRole: string): Promise
 // SUPABASE CLIENT
 // =============================================================================
 
+/** Service role client — bypasses RLS. Used for job mutations and storage. */
 function getSupabaseClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -184,6 +186,11 @@ function getSupabaseClient(): SupabaseClient {
   }
 
   return createClient(url, key);
+}
+
+/** User-scoped client — RLS applies. Used for reading own jobs. */
+function getSupabaseUserClient(accessToken: string): SupabaseClient {
+  return createUserClient(accessToken);
 }
 
 // =============================================================================
@@ -248,12 +255,14 @@ export async function getJob(jobId: string): Promise<ReconstructionJob | null> {
 
 /**
  * Get a job by ID, verifying it belongs to the user.
+ * When accessToken is provided, RLS enforces user ownership.
  */
 export async function getJobForUser(
   jobId: string,
-  userId: string
+  userId: string,
+  accessToken?: string
 ): Promise<ReconstructionJob | null> {
-  const client = getSupabaseClient();
+  const client = accessToken ? getSupabaseUserClient(accessToken) : getSupabaseClient();
 
   const { data, error } = await client
     .from('avatar_reconstruction_jobs')
@@ -275,9 +284,10 @@ export async function getJobForUser(
 
 /**
  * Get all jobs for a user.
+ * When accessToken is provided, RLS enforces user ownership.
  */
-export async function getJobsForUser(userId: string): Promise<ReconstructionJob[]> {
-  const client = getSupabaseClient();
+export async function getJobsForUser(userId: string, accessToken?: string): Promise<ReconstructionJob[]> {
+  const client = accessToken ? getSupabaseUserClient(accessToken) : getSupabaseClient();
 
   const { data, error } = await client
     .from('avatar_reconstruction_jobs')

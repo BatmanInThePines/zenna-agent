@@ -6,6 +6,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createUserClient } from '@/lib/supabase/clients';
 import type {
   ShortTermMemoryStore,
   ConversationTurn,
@@ -16,6 +17,8 @@ interface SupabaseConfig {
   url: string;
   anonKey: string;
   serviceRoleKey?: string;
+  /** Supabase-compatible JWT for RLS-scoped access. When provided, uses user client instead of service role. */
+  accessToken?: string;
 }
 
 interface DatabaseConversationTurn {
@@ -51,7 +54,11 @@ export class SupabaseShortTermStore implements ShortTermMemoryStore {
   private client: SupabaseClient;
 
   constructor(config: SupabaseConfig) {
-    this.client = createClient(config.url, config.serviceRoleKey || config.anonKey);
+    if (config.accessToken) {
+      this.client = createUserClient(config.accessToken);
+    } else {
+      this.client = createClient(config.url, config.serviceRoleKey || config.anonKey);
+    }
   }
 
   async getSessionBuffer(sessionId: string): Promise<ConversationTurn[]> {
@@ -164,7 +171,11 @@ export class SupabaseConversationStore {
   private client: SupabaseClient;
 
   constructor(config: SupabaseConfig) {
-    this.client = createClient(config.url, config.serviceRoleKey || config.anonKey);
+    if (config.accessToken) {
+      this.client = createUserClient(config.accessToken);
+    } else {
+      this.client = createClient(config.url, config.serviceRoleKey || config.anonKey);
+    }
   }
 
   async saveConversation(conversation: Conversation): Promise<void> {
